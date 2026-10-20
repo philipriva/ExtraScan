@@ -17,7 +17,7 @@
 - 資料夾：[processing](https://drive.google.com/drive/folders/1N41jCmxOvOzNQXRtE6DwYojyU5kskqZM)
 - 寫入用 spreadsheet **file id**（`sheet_ids.json` → `open_by_key`），搬 folder 唔影響
 
-每 tab 欄位：`symbol` / `signal` / `asof_et`
+每 tab 欄位 A/B/C：`symbol` / `signal` / `asof_et`（**無 header 行**；A1 即第一隻股）
 
 ## 公式（與 tips / banker_entry 一致）
 

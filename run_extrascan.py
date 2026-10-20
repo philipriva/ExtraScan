@@ -48,9 +48,6 @@ _FUND_NAME_RE = re.compile(
 )
 
 TAB_ORDER = ("yellowALL", "whiteballALL", "yellowETF", "whiteETF")
-HEADER = ["symbol", "signal", "asof_et"]
-
-
 def ema(s: pd.Series, n: int) -> pd.Series:
     return s.ewm(span=n, adjust=False, min_periods=n).mean()
 
@@ -389,7 +386,8 @@ def screen_split(
 
 
 def rows_for(symbols: list[str], signal: str, asof: str) -> list[list[str]]:
-    return [HEADER] + [[s, signal, asof] for s in symbols]
+    """Data rows only (no header) — A1 is first symbol."""
+    return [[s, signal, asof] for s in symbols]
 
 
 def write_local_csvs(outdir: Path, tab_map: dict[str, list[list[str]]]) -> None:
@@ -400,7 +398,7 @@ def write_local_csvs(outdir: Path, tab_map: dict[str, list[list[str]]]) -> None:
             "\n".join(",".join(r) for r in rows) + ("\n" if rows else ""),
             encoding="utf-8",
         )
-        print(f"wrote {path} ({max(0, len(rows) - 1)})", flush=True)
+        print(f"wrote {path} ({len(rows)})", flush=True)
 
 
 def load_sheet_cfg(path: Path) -> dict:

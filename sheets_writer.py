@@ -81,12 +81,12 @@ def write_tabs(
     spreadsheet_id: str,
     tab_rows: dict[str, list[list[Any]]],
 ) -> None:
-    """tab_rows: tab_title -> rows including header."""
+    """tab_rows: tab_title -> data rows only (no header)."""
     gc = _client(sa_json)
     sh = gc.open_by_key(spreadsheet_id)
     for title, rows in tab_rows.items():
         ws = _ensure_worksheet(sh, title)
-        print(f"Sheets: write {title} n={max(0, len(rows) - 1)}", flush=True)
+        print(f"Sheets: write {title} n={len(rows)}", flush=True)
         _clear_and_write(ws, rows)
         time.sleep(0.5)
     print("Sheets: done", flush=True)
