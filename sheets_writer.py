@@ -57,6 +57,9 @@ def write_column(
     sh = gc.open_by_key(spreadsheet_id)
     ws = _ensure_worksheet(sh, tab_title)
     col = column_letter.upper().strip()
+    need_rows = max(len(values), 1000)
+    if ws.row_count < need_rows:
+        ws.resize(rows=need_rows)
     # Clear entire column (values only)
     ws.batch_clear([f"{col}:{col}"])
     if not values:
