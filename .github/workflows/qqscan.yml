@@ -1,0 +1,28 @@
+name: QQscan to Sheet
+
+# Separate from Daily ExtraScan screen job — only fetches txt + writes QQscan A/J.
+on:
+  schedule:
+    # GitHub Actions cron is UTC only (no CRON_TZ).
+    # Intent: US cash equity close + 2 hours, Mon–Fri.
+    # 0 22 * * 1-5 ≈ 18:00 America/New_York during EDT (UTC-4).
+    # During EST (UTC-5) change to: 0 23 * * 1-5
+    - cron: "0 22 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  qqscan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Write QQscan A + J
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python write_qqscan.py

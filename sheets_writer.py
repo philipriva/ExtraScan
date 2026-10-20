@@ -26,11 +26,11 @@ def _client(sa_json: str):
     return gspread.authorize(creds)
 
 
-def _ensure_worksheet(sh, title: str):
+def _ensure_worksheet(sh, title: str, rows: int = 10000, cols: int = 26):
     try:
         return sh.worksheet(title)
     except Exception:
-        return sh.add_worksheet(title=title, rows=10000, cols=6)
+        return sh.add_worksheet(title=title, rows=rows, cols=cols)
 
 
 def _clear_and_write(ws, rows: list[list[Any]]) -> None:
@@ -43,6 +43,34 @@ def _clear_and_write(ws, rows: list[list[Any]]) -> None:
         ws.update(f"A{start + 1}", rows[start:end], value_input_option="RAW")
         start = end
         time.sleep(0.4)
+
+
+def write_column(
+    sa_json: str,
+    spreadsheet_id: str,
+    tab_title: str,
+    column_letter: str,
+    values: list[str],
+) -> int:
+    """Clear one column and write one symbol per row starting at row 1. Returns row count."""
+    gc = _client(sa_json)
+    sh = gc.open_by_key(spreadsheet_id)
+    ws = _ensure_worksheet(sh, tab_title)
+    col = column_letter.upper().strip()
+    # Clear entire column (values only)
+    ws.batch_clear([f"{col}:{col}"])
+    if not values:
+        print(f"Sheets: {tab_title}!{col} cleared (0 rows)", flush=True)
+        return 0
+    rows = [[v] for v in values]
+    start = 0
+    while start < len(rows):
+        end = min(start + CHUNK, len(rows))
+        ws.update(f"{col}{start + 1}", rows[start:end], value_input_option="RAW")
+        start = end
+        time.sleep(0.4)
+    print(f"Sheets: write {tab_title}!{col} n={len(values)}", flush=True)
+    return len(values)
 
 
 def write_tabs(

@@ -73,3 +73,18 @@ python run_extrascan.py
 | `sheets_writer.py` | gspread 覆寫 tab |
 | `sheet_ids.json` | spreadsheet / folder id |
 | `etf_list.txt` | 固定 ETF 名單 |
+
+## QQscan tab
+
+Separate workflow [`.github/workflows/qqscan.yml`](.github/workflows/qqscan.yml) (`QQscan to Sheet`):
+
+- **Schedule:** Mon–Fri `0 22 * * 1-5` UTC ≈ **18:00 America/New_York** during EDT (US cash close + 2h). In EST use `0 23 * * 1-5`.
+- **Column A:** latest `Strong_Stocks_V3_YYYYMMDD.txt` from [`philipriva/my-stock-scanner`](https://github.com/philipriva/my-stock-scanner) (one symbol per row; clear+overwrite).
+- **Column J:** latest `Maggiestocks_YYYYMMDD.txt` from [`philipriva/Q-scanner`](https://github.com/philipriva/Q-scanner) (same).
+- Uses existing secret `GOOGLE_SERVICE_ACCOUNT_JSON` (no new API keys). Manual: Actions → **QQscan to Sheet** → Run workflow.
+
+```bash
+python write_qqscan.py --dry-run
+GOOGLE_SERVICE_ACCOUNT_JSON='...' python write_qqscan.py
+```
+

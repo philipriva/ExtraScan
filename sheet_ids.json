@@ -10,10 +10,12 @@
     "yellowALL": "yellowALL",
     "whiteballALL": "whiteballALL",
     "yellowETF": "yellowETF",
-    "whiteETF": "whiteETF"
+    "whiteETF": "whiteETF",
+    "QQscan": "QQscan"
   },
   "notes": {
     "created": "2026-10-20",
-    "schedule": "US cash close +15m Mon–Fri (GitHub cron UTC: 15 20 * * 1-5 ≈ 16:15 EDT)"
+    "schedule": "US cash close +15m Mon\u2013Fri (GitHub cron UTC: 15 20 * * 1-5 \u2248 16:15 EDT)",
+    "qqscan": "Col A \u2190 philipriva/my-stock-scanner Strong_Stocks_V3_YYYYMMDD.txt (latest); Col J \u2190 philipriva/Q-scanner Maggiestocks_YYYYMMDD.txt (latest). Clear+overwrite each column. Schedule: US close +2h Mon\u2013Fri (cron 0 22 * * 1-5 \u2248 18:00 ET / EDT)."
   }
 }
