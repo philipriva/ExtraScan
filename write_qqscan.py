@@ -7,6 +7,7 @@ import argparse
 import os
 import re
 import sys
+from datetime import date, timedelta
 from typing import Optional
 
 import requests
@@ -32,15 +33,14 @@ def _headers() -> dict[str, str]:
     return h
 
 
-def _latest_txt(owner_repo: str, prefix: str) -> tuple[str, str]:
-    """Return (filename, raw download URL) for newest YYYYMMDD match on repo root."""
+def _latest_via_api(owner_repo: str, prefix: str) -> tuple[str, str]:
     url = f"https://api.github.com/repos/{owner_repo}/contents/"
     r = requests.get(url, headers=_headers(), timeout=60)
     r.raise_for_status()
     items = r.json()
     if not isinstance(items, list):
         raise RuntimeError(f"Unexpected contents response for {owner_repo}")
-    candidates: list[tuple[str, str, str]] = []  # date, name, download_url
+    candidates: list[tuple[str, str, str]] = []
     for it in items:
         name = it.get("name") or ""
         if not name.startswith(prefix) or not name.endswith(".txt"):
@@ -55,19 +55,44 @@ def _latest_txt(owner_repo: str, prefix: str) -> tuple[str, str]:
     if not candidates:
         raise FileNotFoundError(f"No {prefix}YYYYMMDD.txt in {owner_repo}")
     candidates.sort(key=lambda t: t[0], reverse=True)
-    _date, name, download = candidates[0]
+    _d, name, download = candidates[0]
     return name, download
+
+
+def _latest_via_raw_walk(owner_repo: str, prefix: str, days: int = 14) -> tuple[str, str]:
+    """When API is rate-limited, probe raw URLs for today..today-days."""
+    sess = requests.Session()
+    sess.headers.update({"User-Agent": "ExtraScan-QQscan"})
+    today = date.today()
+    for i in range(days):
+        d = today - timedelta(days=i)
+        name = f"{prefix}{d.strftime('%Y%m%d')}.txt"
+        url = f"https://raw.githubusercontent.com/{owner_repo}/main/{name}"
+        r = sess.head(url, timeout=30, allow_redirects=True)
+        if r.status_code == 200:
+            return name, url
+        # some CDNs dislike HEAD — try GET range
+        if r.status_code in (403, 405):
+            g = sess.get(url, timeout=30)
+            if g.status_code == 200 and g.text.strip():
+                return name, url
+    raise FileNotFoundError(
+        f"No {prefix}YYYYMMDD.txt found via raw walk ({days}d) in {owner_repo}"
+    )
+
+
+def _latest_txt(owner_repo: str, prefix: str) -> tuple[str, str]:
+    try:
+        return _latest_via_api(owner_repo, prefix)
+    except Exception as exc:
+        print(f"API list failed ({exc}); raw date walk…", flush=True)
+        return _latest_via_raw_walk(owner_repo, prefix)
 
 
 def _fetch_symbols(download_url: str) -> list[str]:
     r = requests.get(download_url, headers=_headers(), timeout=60)
     r.raise_for_status()
-    lines = []
-    for ln in r.text.splitlines():
-        s = ln.strip()
-        if s:
-            lines.append(s)
-    return lines
+    return [ln.strip() for ln in r.text.splitlines() if ln.strip()]
 
 
 def main(argv: Optional[list[str]] = None) -> int:
