@@ -1,0 +1,42 @@
+name: Daily ExtraScan
+
+on:
+  schedule:
+    # GitHub Actions cron is UTC only (no CRON_TZ).
+    # 15 20 * * 1-5 ≈ Mon–Fri 16:15 America/New_York during EDT (UTC-4).
+    # During EST (UTC-5) change to: 15 21 * * 1-5
+    - cron: "15 20 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      etf_only:
+        description: "Only scan fixed ETF list (skip full US universe)"
+        type: boolean
+        default: false
+
+jobs:
+  screen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Run ExtraScan
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          EXTRA=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.etf_only }}" = "true" ]; then
+            EXTRA="--etf-only"
+          fi
+          python run_extrascan.py --out-dir out $EXTRA
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extrascan_out
+          path: out/
+          retention-days: 14

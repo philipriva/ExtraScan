@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+out/
+*.txt
+!etf_list.txt
+!requirements.txt
+.env
+sa.json
+*-sa.json
+download_stats.txt

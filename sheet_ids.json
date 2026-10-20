@@ -1,0 +1,19 @@
+{
+  "folder_id": "1N41jCmxOvOzNQXRtE6DwYojyU5kskqZM",
+  "folder_url": "https://drive.google.com/drive/folders/1N41jCmxOvOzNQXRtE6DwYojyU5kskqZM",
+  "spreadsheet": {
+    "id": "1FSOmey7ALHFuYXxZSgjZnjWA5zpmbiv48PWAJD_yYRk",
+    "title": "ExtraScan",
+    "url": "https://docs.google.com/spreadsheets/d/1FSOmey7ALHFuYXxZSgjZnjWA5zpmbiv48PWAJD_yYRk/edit"
+  },
+  "tabs": {
+    "yellowALL": "yellowALL",
+    "whiteballALL": "whiteballALL",
+    "yellowETF": "yellowETF",
+    "whiteETF": "whiteETF"
+  },
+  "notes": {
+    "created": "2026-10-20",
+    "schedule": "US cash close +15m Mon–Fri (GitHub cron UTC: 15 20 * * 1-5 ≈ 16:15 EDT)"
+  }
+}
