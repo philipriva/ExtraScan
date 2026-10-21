@@ -464,9 +464,10 @@ def main() -> int:
         help="Curated ETF file used only with --fixed-etf-list",
     )
     ap.add_argument(
-        "--all-etf-fund",
+        "--fixed-etf-list",
         action="store_true",
-        help="Screen full Nasdaq ETF/fund universe (default is curated etf_list.txt)",
+        help="Use curated etf_list.txt instead of full Nasdaq ETF/fund universe "
+        "(BankerEntry篩選_new uses the full Nasdaq ETF/fund set)",
     )
     ap.add_argument(
         "--sheet-ids",
@@ -519,14 +520,16 @@ def main() -> int:
             us = universe_us_ex_etf_fund()
             yellow_all, white_all, st_us = screen_split(us, "all-US-ex-ETF")
             all_stats.append(st_us)
-        if args.all_etf_fund:
-            etf = universe_us_etf_fund()
-            etf_label = "all-ETF-fund"
-        else:
+        if args.fixed_etf_list:
             if not etf_path.exists():
-                raise SystemExit(f"missing curated ETF list: {etf_path}")
+                raise SystemExit(f"--fixed-etf-list set but missing file: {etf_path}")
             etf = load_etf_list(etf_path)
             etf_label = "fixed-ETF"
+        else:
+            # Same universe as banker_screener_app_new load_us_directory
+            # with exclude_etf_fund=False, then keep only etf_map True.
+            etf = universe_us_etf_fund()
+            etf_label = "all-ETF-fund"
         print(f"ETF universe source={etf_label} n={len(etf)}", flush=True)
         yellow_etf, white_etf, st_etf = screen_split(etf, etf_label)
         all_stats.append(st_etf)

@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       etf_only:
-        description: "Only scan fixed ETF list (skip full US universe)"
+        description: "Only scan Nasdaq ETF/fund universe (skip ALL equities; do not clear ALL tabs)"
         type: boolean
         default: false
 

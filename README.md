@@ -60,8 +60,12 @@ pip install -r requirements.txt
 python run_extrascan.py --symbols AAPL,MSFT,SPY,QQQ
 # 只掃 curated etf_list.txt
 python run_extrascan.py --etf-only
+# optional curated list only:
+# python run_extrascan.py --etf-only --fixed-etf-list
 # 可選：全 Nasdaq ETF/fund（未作預設，等確認）
-python run_extrascan.py --etf-only --all-etf-fund
+python run_extrascan.py --etf-only
+# optional curated list only:
+# python run_extrascan.py --etf-only --fixed-etf-list --all-etf-fund
 # 完整（全美 ex-ETF + curated ETF；需時很長）
 export GOOGLE_SERVICE_ACCOUNT_JSON="$(cat /path/to/sa.json)"
 python run_extrascan.py
