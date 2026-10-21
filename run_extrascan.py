@@ -464,9 +464,9 @@ def main() -> int:
         help="Curated ETF file used only with --fixed-etf-list",
     )
     ap.add_argument(
-        "--fixed-etf-list",
+        "--all-etf-fund",
         action="store_true",
-        help="Use --etf-list file instead of full Nasdaq ETF/fund universe",
+        help="Screen full Nasdaq ETF/fund universe (default is curated etf_list.txt)",
     )
     ap.add_argument(
         "--sheet-ids",
@@ -519,14 +519,14 @@ def main() -> int:
             us = universe_us_ex_etf_fund()
             yellow_all, white_all, st_us = screen_split(us, "all-US-ex-ETF")
             all_stats.append(st_us)
-        if args.fixed_etf_list:
-            if not etf_path.exists():
-                raise SystemExit(f"--fixed-etf-list set but missing file: {etf_path}")
-            etf = load_etf_list(etf_path)
-            etf_label = "fixed-ETF"
-        else:
+        if args.all_etf_fund:
             etf = universe_us_etf_fund()
             etf_label = "all-ETF-fund"
+        else:
+            if not etf_path.exists():
+                raise SystemExit(f"missing curated ETF list: {etf_path}")
+            etf = load_etf_list(etf_path)
+            etf_label = "fixed-ETF"
         print(f"ETF universe source={etf_label} n={len(etf)}", flush=True)
         yellow_etf, white_etf, st_etf = screen_split(etf, etf_label)
         all_stats.append(st_etf)

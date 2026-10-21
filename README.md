@@ -6,12 +6,10 @@
 |-----|------|------|
 | `yellowALL` | 全美股（Nasdaq Trader），**剔 ETF／fund** | 黃燭 (yellow) |
 | `whiteballALL` | 同上 | 白圓 (white_circle) |
-| `yellowETF` | Nasdaq Trader **ETF／fund**（`ETF=Y` 或名稱含 ETF/FUND/TRUST…） | 黃燭 |
+| `yellowETF` | 預設 `etf_list.txt`；可選 `--all-etf-fund` 用全 Nasdaq ETF／fund | 黃燭 |
 | `whiteETF` | 同上 | 白圓 |
 
-與 [us-fundflow-tips-screener](https://github.com/philipriva/us-fundflow-tips-screener) 不同：此 repo **分開** 黃燭／白圓；ALL 宇宙 **不含** ETF／fund，ETF tabs 用 **完整** Nasdaq ETF／fund 宇宙（不再用 curated `etf_list.txt` 做預設）；寫入 Sheets（tips 只出 artifact `.txt`）。
-
-`etf_list.txt` 仍保留；只有加 `--fixed-etf-list` 先會用返固定名單。
+與 [us-fundflow-tips-screener](https://github.com/philipriva/us-fundflow-tips-screener) 不同：此 repo **分開** 黃燭／白圓；ALL 宇宙 **不含** ETF／fund；ETF tabs **預設** curated `etf_list.txt`（待 Philip 決定是否改全 Nasdaq ETF／fund，用 `--all-etf-fund`）。寫入 Sheets（tips 只出 artifact `.txt`）。
 
 ## Google Sheet
 
@@ -60,11 +58,11 @@
 pip install -r requirements.txt
 # 少數 symbols（四個 tab 都會寫同一批 hits）
 python run_extrascan.py --symbols AAPL,MSFT,SPY,QQQ
-# 只掃 Nasdaq ETF/fund 宇宙
+# 只掃 curated etf_list.txt
 python run_extrascan.py --etf-only
-# 可選：改用 curated etf_list.txt
-python run_extrascan.py --etf-only --fixed-etf-list
-# 完整（全美 ex-ETF + 全 ETF/fund；需時很長）
+# 可選：全 Nasdaq ETF/fund（未作預設，等確認）
+python run_extrascan.py --etf-only --all-etf-fund
+# 完整（全美 ex-ETF + curated ETF；需時很長）
 export GOOGLE_SERVICE_ACCOUNT_JSON="$(cat /path/to/sa.json)"
 python run_extrascan.py
 ```
@@ -78,7 +76,7 @@ python run_extrascan.py
 | `write_qqscan.py` | Strong_Stocks + Maggiestocks → QQscan A/J |
 | `write_etf_leaders.py` | yellowETF/whiteETF → Schwab holdings leaders → QQscan F |
 | `sheet_ids.json` | spreadsheet / folder id |
-| `etf_list.txt` | 可選 curated ETF 名單（`--fixed-etf-list`） |
+| `etf_list.txt` | 預設 curated ETF 名單（`--all-etf-fund` 可改全宇宙） |
 
 ## QQscan tab
 
