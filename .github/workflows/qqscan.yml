@@ -7,8 +7,9 @@ on:
     # Must run AFTER Q-scanner Maggiestocks_YYYYMMDD + my-stock-scanner Strong_Stocks_V3
     # typically land (~01:52 UTC / ~09:52 HKT). Old "0 22 * * 1-5" was US close+2h but
     # raced ahead of those publishes and wrote yesterday's files.
-    # 3 2 * * 2-6 ≈ 10:03 HKT Tue–Sat (covers Mon–Fri US sessions).
-    - cron: "3 2 * * 2-6"
+    # 3 2 left only ~11 min after Maggie; widen to 30 2 (~38 min buffer).
+    # 30 2 * * 2-6 ≈ 10:30 HKT Tue–Sat (covers Mon–Fri US sessions).
+    - cron: "30 2 * * 2-6"
   workflow_dispatch:
 
 jobs:
