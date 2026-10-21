@@ -1,0 +1,27 @@
+name: ETF Leaders to QQscan F
+
+# After Fund Flow writes yellowETF/whiteETF (~04:15 HKT) and after QQscan A/J
+# (~10:30 HKT / cron 30 2). Buffer avoids concurrent writes to ExtraScan Sheet.
+on:
+  schedule:
+    # 0 3 * * 2-6 UTC ≈ 11:00 HKT Tue–Sat (~30 min after QQscan A/J).
+    - cron: "0 3 * * 2-6"
+  workflow_dispatch:
+
+jobs:
+  etf-leaders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+      - name: Scan ETF holdings → QQscan F
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: python write_etf_leaders.py
