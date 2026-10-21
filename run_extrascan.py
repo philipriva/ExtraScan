@@ -9,7 +9,7 @@ Tabs:
   whiteETF      — Nasdaq Trader ETF/fund 宇宙 白圓
 
 Formula = us-fundflow-tips-screener / banker_entry fund_flow_hit (yellow / white_circle).
-TF = daily; drop forming bar before 16:15 ET.
+TF = daily 1D; drop forming bar before 16:00 ET (Banker only_completed); auto_adjust=True.
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ NASDAQ_LISTED = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 OTHER_LISTED = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
 
 BATCH = 100
-PERIOD = "5y"  # ~Banker 1D lookback 1500d; recursive xsa needs long warm-up
+LOOKBACK_DAYS = 1500  # Banker TF_SPEC["1D"] lookback; recursive xsa warm-up
 MIN_BARS = 120
 DOWNLOAD_RETRIES = 3
 DOWNLOAD_BACKOFF_SEC = 2.0
@@ -53,25 +53,28 @@ def ema(s: pd.Series, n: int) -> pd.Series:
 
 
 def xsa(series: pd.Series, length: int, wei: float) -> pd.Series:
-    """Same recursive SMA as banker_entry_screener_app.pyw."""
+    """Same recursive SMA as banker_screener_app_new.pyw (numpy path)."""
     src = series.astype(float)
     ma = src.rolling(length, min_periods=length).mean()
-    out = pd.Series(index=src.index, dtype=float)
+    vals = src.to_numpy(dtype=float, copy=False)
+    smas = ma.to_numpy(dtype=float, copy=False)
+    n = len(vals)
+    out_a = [float("nan")] * n
     prev = float("nan")
-    for i, (val, sma) in enumerate(zip(src, ma)):
-        if pd.isna(val):
-            out.iloc[i] = float("nan")
+    for i in range(n):
+        val = vals[i]
+        if val != val:  # NaN
             continue
-        if pd.isna(prev):
-            if pd.isna(sma):
-                out.iloc[i] = float("nan")
-            else:
-                prev = float(sma)
-                out.iloc[i] = prev
+        if prev != prev:  # NaN
+            sma = smas[i]
+            if sma != sma:
+                continue
+            prev = float(sma)
+            out_a[i] = prev
         else:
             prev = (float(val) * wei + prev * (length - wei)) / length
-            out.iloc[i] = prev
-    return out
+            out_a[i] = prev
+    return pd.Series(out_a, index=src.index, dtype=float)
 
 
 def safe_ratio(numer: pd.Series, a: pd.Series, b: pd.Series) -> pd.Series:
@@ -233,12 +236,17 @@ def hkt_now_str() -> str:
 
 
 def drop_forming(d: pd.DataFrame) -> pd.DataFrame:
-    """Drop today's bar until after 16:15 ET (same as tips/exclude)."""
+    """Drop today's daily bar until after 16:00 ET.
+
+    Matches banker_screener_app_new.drop_incomplete_bar(tf_key="1D") when
+    only_completed=True. ExtraScan always runs in that mode (post-close GH
+    Action); Banker GUI default only_completed=False keeps the forming bar.
+    """
     if d is None or d.empty:
         return d
     now = ny_now()
     last = pd.Timestamp(d.index[-1]).date()
-    if last == now.date() and (now.hour, now.minute) < (16, 15):
+    if last == now.date() and (now.hour, now.minute) < (16, 0):
         return d.iloc[:-1]
     return d
 
@@ -278,12 +286,15 @@ def _extract_batch_frames(raw: pd.DataFrame, batch: list[str]) -> dict[str, pd.D
 
 
 def _yf_download_once(tickers: list[str]):
+    # Match banker_screener_app_new.download_history for 1D:
+    # start=utcnow-1500d, interval=1d, auto_adjust=True.
+    start = (datetime.utcnow() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     return yf.download(
         tickers,
-        period=PERIOD,
+        start=start,
         interval="1d",
         group_by="ticker",
-        auto_adjust=False,
+        auto_adjust=True,
         threads=True,
         progress=False,
     )
