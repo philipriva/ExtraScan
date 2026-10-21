@@ -32,7 +32,7 @@ NASDAQ_LISTED = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 OTHER_LISTED = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
 
 BATCH = 100
-PERIOD = "2y"
+PERIOD = "5y"  # ~Banker 1D lookback 1500d; recursive xsa needs long warm-up
 MIN_BARS = 120
 DOWNLOAD_RETRIES = 3
 DOWNLOAD_BACKOFF_SEC = 2.0
@@ -82,9 +82,14 @@ def safe_ratio(numer: pd.Series, a: pd.Series, b: pd.Series) -> pd.Series:
 def fund_flow_flags(df: pd.DataFrame) -> tuple[bool, bool]:
     """Return (yellow, white_circle) on latest completed bar.
 
-    Matches banker_entry_screener_app.fund_flow_hit modes yellow / white_circle:
+    Matches banker_screener_app_new.fund_flow_hit modes yellow / white_circle:
       yellow       = is_banker (fundtrend cross above bull & bull < 25)
       white_circle = prev status BLUE & today GREEN & not banker
+
+    Mutual exclusion (same as Banker): white requires ~is_banker, so a symbol
+    cannot be both yellow and white on the same bar. Banker GUI is a radio
+    (one mode per run); ExtraScan evaluates both and splits into two tabs.
+    Example 2026-10-20 1D: XBI/XES/XPH → yellow only (not whiteETF).
     """
     if df is None or len(df) < MIN_BARS:
         return False, False

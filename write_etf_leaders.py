@@ -200,6 +200,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         default="",
         help="Comma-separated ETF override (skip Sheet read)",
     )
+    p.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=25,
+        help="Write QQscan!F every N ETFs so a timeout keeps partial leaders (0=only at end)",
+    )
     args = p.parse_args(argv)
 
     sa = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
@@ -254,12 +260,29 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         page = context.new_page()
 
-        for etf in etf_list:
+        for i, etf in enumerate(etf_list, 1):
             symbols = scrape_etf_holdings(page, etf)
             leaders = analyze_holdings(etf, symbols)
             all_leaders.update(leaders)
-            print(f"✅ {etf} 掃描完成 leaders={len(leaders)}", flush=True)
+            print(
+                f"✅ [{i}/{len(etf_list)}] {etf} 掃描完成 leaders={len(leaders)} "
+                f"unique_so_far={len(all_leaders)}",
+                flush=True,
+            )
             print("-" * 30, flush=True)
+            every = int(args.checkpoint_every or 0)
+            if (
+                every > 0
+                and not args.dry_run
+                and sa
+                and (i % every == 0 or i == len(etf_list))
+            ):
+                partial = sorted(all_leaders)
+                n_f = write_column(sa, args.sheet_id, TAB_QQ, "F", partial)
+                print(
+                    f"checkpoint QQscan F={n_f} after {i}/{len(etf_list)} ETFs",
+                    flush=True,
+                )
 
         browser.close()
 
@@ -274,6 +297,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("dry-run OK (no Sheet write)", flush=True)
         return 0
 
+    # Final write (idempotent if last checkpoint already wrote the full set)
     n_f = write_column(sa, args.sheet_id, TAB_QQ, "F", leaders_sorted)
     print(f"QQscan done F={n_f}", flush=True)
     return 0
