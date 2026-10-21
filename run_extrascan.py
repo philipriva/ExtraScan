@@ -494,6 +494,7 @@ def main() -> int:
     yellow_etf: list[str] = []
     white_etf: list[str] = []
     all_stats: list[dict] = []
+    etf_only_mode = False
 
     if args.symbols.strip():
         syms = parse_symbols(args.symbols)
@@ -513,6 +514,7 @@ def main() -> int:
             print(f"  {s}: {tag}")
     else:
         etf_only = args.etf_only or args.skip_all_us
+        etf_only_mode = bool(etf_only)
         if not etf_only:
             us = universe_us_ex_etf_fund()
             yellow_all, white_all, st_us = screen_split(us, "all-US-ex-ETF")
@@ -540,6 +542,13 @@ def main() -> int:
 
     write_local_csvs(cwd / args.out_dir, tab_map)
 
+    # --etf-only must not wipe ALL tabs on Sheets (local CSVs still have empties)
+    sheets_map = (
+        {k: tab_map[k] for k in ("yellowETF", "whiteETF")}
+        if etf_only_mode
+        else tab_map
+    )
+
     stats_path = cwd / args.out_dir / "download_stats.txt"
     lines = [f"run_timestamp={hkt_now_str()}", f"asof_et={asof}", ""]
     for st in all_stats:
@@ -565,7 +574,7 @@ def main() -> int:
     stats_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"wrote {stats_path}", flush=True)
 
-    maybe_write_sheets(cfg, tab_map)
+    maybe_write_sheets(cfg, sheets_map)
     print(
         f"done | Y_ALL={len(yellow_all)} W_ALL={len(white_all)} "
         f"Y_ETF={len(yellow_etf)} W_ETF={len(white_etf)}",
