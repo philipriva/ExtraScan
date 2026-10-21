@@ -4,10 +4,11 @@ name: QQscan to Sheet
 on:
   schedule:
     # GitHub Actions cron is UTC only (no CRON_TZ).
-    # Intent: US cash equity close + 2 hours, Mon–Fri.
-    # 0 22 * * 1-5 ≈ 18:00 America/New_York during EDT (UTC-4).
-    # During EST (UTC-5) change to: 0 23 * * 1-5
-    - cron: "0 22 * * 1-5"
+    # Must run AFTER Q-scanner Maggiestocks_YYYYMMDD + my-stock-scanner Strong_Stocks_V3
+    # typically land (~01:52 UTC / ~09:52 HKT). Old "0 22 * * 1-5" was US close+2h but
+    # raced ahead of those publishes and wrote yesterday's files.
+    # 3 2 * * 2-6 ≈ 10:03 HKT Tue–Sat (covers Mon–Fri US sessions).
+    - cron: "3 2 * * 2-6"
   workflow_dispatch:
 
 jobs:
