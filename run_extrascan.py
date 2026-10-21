@@ -5,8 +5,8 @@
 Tabs:
   yellowALL     — 全美股（剔 ETF/fund）黃燭
   whiteballALL  — 全美股（剔 ETF/fund）白圓
-  yellowETF     — 固定 ETF 名單 黃燭
-  whiteETF      — 固定 ETF 名單 白圓
+  yellowETF     — Nasdaq Trader ETF/fund 宇宙 黃燭（非固定名單）
+  whiteETF      — Nasdaq Trader ETF/fund 宇宙 白圓
 
 Formula = us-fundflow-tips-screener / banker_entry fund_flow_hit (yellow / white_circle).
 TF = daily; drop forming bar before 16:15 ET.
@@ -143,8 +143,8 @@ def _is_etf_or_fund_row(row) -> bool:
     return bool(name and _FUND_NAME_RE.search(name))
 
 
-def universe_us_ex_etf_fund() -> list[str]:
-    """Nasdaq Trader US equities; EXCLUDE ETF/fund (same as us-consider-screener)."""
+def _nasdaq_trader_frames() -> pd.DataFrame:
+    """Nasdaq listed + other listed, normalized symbol, no test/$/^."""
     a = _dir(NASDAQ_LISTED).rename(columns={"Symbol": "sym"})
     b = _dir(OTHER_LISTED).rename(columns={"ACT Symbol": "sym"})
     pieces = []
@@ -158,6 +158,12 @@ def universe_us_ex_etf_fund() -> list[str]:
     df = df.copy()
     df["sym"] = df["sym"].map(_norm_sym)
     df = df[df["sym"].astype(bool)]
+    return df
+
+
+def universe_us_ex_etf_fund() -> list[str]:
+    """Nasdaq Trader US equities; EXCLUDE ETF/fund (same as us-consider-screener)."""
+    df = _nasdaq_trader_frames()
     keep: set[str] = set()
     for _, row in df.iterrows():
         if not _is_etf_or_fund_row(row):
@@ -165,7 +171,22 @@ def universe_us_ex_etf_fund() -> list[str]:
     return sorted(keep)
 
 
+def universe_us_etf_fund() -> list[str]:
+    """Nasdaq Trader symbols that ARE ETF/fund (ETF=Y or fund-like name).
+
+    Complement of universe_us_ex_etf_fund. Used for yellowETF / whiteETF so
+    ETFs like SLYG/SPSM/XTN are included (not only curated etf_list.txt).
+    """
+    df = _nasdaq_trader_frames()
+    keep: set[str] = set()
+    for _, row in df.iterrows():
+        if _is_etf_or_fund_row(row):
+            keep.add(row["sym"])
+    return sorted(keep)
+
+
 def load_etf_list(path: Path) -> list[str]:
+    """Optional curated override when --fixed-etf-list is set."""
     out, seen = [], set()
     for line in path.read_text(encoding="utf-8").splitlines():
         s = _norm_sym(line.split("#", 1)[0])
@@ -429,8 +450,8 @@ def main() -> int:
     ap.add_argument(
         "--etf-only",
         action="store_true",
-        help="Skip full-US scan; only screen etf_list.txt → yellowETF/whiteETF "
-        "(ALL tabs get header-only empty body)",
+        help="Skip full-US equities scan; only screen Nasdaq ETF/fund universe "
+        "→ yellowETF/whiteETF (ALL tabs stay empty)",
     )
     ap.add_argument(
         "--skip-all-us",
@@ -440,7 +461,12 @@ def main() -> int:
     ap.add_argument(
         "--etf-list",
         default="etf_list.txt",
-        help="Path to fixed ETF list (default etf_list.txt)",
+        help="Curated ETF file used only with --fixed-etf-list",
+    )
+    ap.add_argument(
+        "--fixed-etf-list",
+        action="store_true",
+        help="Use --etf-list file instead of full Nasdaq ETF/fund universe",
     )
     ap.add_argument(
         "--sheet-ids",
@@ -491,8 +517,16 @@ def main() -> int:
             us = universe_us_ex_etf_fund()
             yellow_all, white_all, st_us = screen_split(us, "all-US-ex-ETF")
             all_stats.append(st_us)
-        etf = load_etf_list(etf_path)
-        yellow_etf, white_etf, st_etf = screen_split(etf, "fixed-ETF")
+        if args.fixed_etf_list:
+            if not etf_path.exists():
+                raise SystemExit(f"--fixed-etf-list set but missing file: {etf_path}")
+            etf = load_etf_list(etf_path)
+            etf_label = "fixed-ETF"
+        else:
+            etf = universe_us_etf_fund()
+            etf_label = "all-ETF-fund"
+        print(f"ETF universe source={etf_label} n={len(etf)}", flush=True)
+        yellow_etf, white_etf, st_etf = screen_split(etf, etf_label)
         all_stats.append(st_etf)
 
     tab_map = {

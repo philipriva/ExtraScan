@@ -6,10 +6,12 @@
 |-----|------|------|
 | `yellowALL` | 全美股（Nasdaq Trader），**剔 ETF／fund** | 黃燭 (yellow) |
 | `whiteballALL` | 同上 | 白圓 (white_circle) |
-| `yellowETF` | `etf_list.txt` 固定名單（已去重 ICLN／CNRG） | 黃燭 |
+| `yellowETF` | Nasdaq Trader **ETF／fund**（`ETF=Y` 或名稱含 ETF/FUND/TRUST…） | 黃燭 |
 | `whiteETF` | 同上 | 白圓 |
 
-與 [us-fundflow-tips-screener](https://github.com/philipriva/us-fundflow-tips-screener) 不同：此 repo **分開** 黃燭／白圓，ALL 宇宙 **不含** ETF／fund，並寫入 Sheets（tips 只出 artifact `.txt`）。
+與 [us-fundflow-tips-screener](https://github.com/philipriva/us-fundflow-tips-screener) 不同：此 repo **分開** 黃燭／白圓；ALL 宇宙 **不含** ETF／fund，ETF tabs 用 **完整** Nasdaq ETF／fund 宇宙（不再用 curated `etf_list.txt` 做預設）；寫入 Sheets（tips 只出 artifact `.txt`）。
+
+`etf_list.txt` 仍保留；只有加 `--fixed-etf-list` 先會用返固定名單。
 
 ## Google Sheet
 
@@ -34,7 +36,7 @@
   - ≈ **Mon–Fri 16:15 EDT**（夏令；美股現金收市 16:00 ET +15m）  
   - 冬令 EST 請改為 `15 21 * * 1-5`（GitHub Actions cron **只支援 UTC**，無 `CRON_TZ`）
 - **手動**：Actions → *Daily ExtraScan* → Run workflow  
-  - 可勾 `etf_only`：只掃固定 ETF 名單（煙測／省時間）
+  - 可勾 `etf_only`：只掃 Nasdaq ETF／fund 宇宙（跳過 ALL 股票）
 - **Artifact**：`extrascan_out`（四個 CSV + `download_stats.txt`），保留 14 日
 
 ### Secret
@@ -58,9 +60,11 @@
 pip install -r requirements.txt
 # 少數 symbols（四個 tab 都會寫同一批 hits）
 python run_extrascan.py --symbols AAPL,MSFT,SPY,QQQ
-# 只掃固定 ETF 名單
+# 只掃 Nasdaq ETF/fund 宇宙
 python run_extrascan.py --etf-only
-# 完整（全美 ex-ETF + ETF 名單；需時很長）
+# 可選：改用 curated etf_list.txt
+python run_extrascan.py --etf-only --fixed-etf-list
+# 完整（全美 ex-ETF + 全 ETF/fund；需時很長）
 export GOOGLE_SERVICE_ACCOUNT_JSON="$(cat /path/to/sa.json)"
 python run_extrascan.py
 ```
@@ -74,7 +78,7 @@ python run_extrascan.py
 | `write_qqscan.py` | Strong_Stocks + Maggiestocks → QQscan A/J |
 | `write_etf_leaders.py` | yellowETF/whiteETF → Schwab holdings leaders → QQscan F |
 | `sheet_ids.json` | spreadsheet / folder id |
-| `etf_list.txt` | 固定 ETF 名單 |
+| `etf_list.txt` | 可選 curated ETF 名單（`--fixed-etf-list`） |
 
 ## QQscan tab
 
@@ -107,4 +111,3 @@ GOOGLE_SERVICE_ACCOUNT_JSON='...' python write_etf_leaders.py
 # smoke with override:
 GOOGLE_SERVICE_ACCOUNT_JSON='...' python write_etf_leaders.py --etfs XBI,XPH --dry-run
 ```
-
