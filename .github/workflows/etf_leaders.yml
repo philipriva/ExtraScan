@@ -1,15 +1,37 @@
 name: ETF Leaders to QQscan F
 
-# After Fund Flow writes yellowETF/whiteETF (~04:15 HKT) and after QQscan A/J
-# (~10:30 HKT / cron 30 2). Buffer avoids concurrent writes to ExtraScan Sheet.
+# yellowETF+whiteETF union → Schwab holdings + yfinance filter → QQscan column F.
+# Reuses GOOGLE_SERVICE_ACCOUNT_JSON. Does not touch Fund Flow / QQscan A·J / IC.
+#
+# Triggers (belt + suspenders + after Fund Flow):
+# 1) workflow_run — after Daily ExtraScan succeeds (fresh yellow/white)
+# 2) schedule primary/backup — GitHub UTC cron (can delay/skip after YAML churn)
+# 3) workflow_dispatch — manual / API
+#
+# Scheduler resync: 2026-10-22 — disable/enable after this push if schedules stay quiet.
+# Avoid colliding Fund Flow 15 20 and QQscan 30 2 / 15 4.
 on:
+  workflow_run:
+    workflows: ["Daily ExtraScan"]
+    types: [completed]
   schedule:
-    # 0 3 * * 2-6 UTC ≈ 11:00 HKT Tue–Sat (~30 min after QQscan A/J).
+    # Primary: 0 3 * * 2-6 ≈ 11:00 HKT Tue–Sat (~30 min after QQscan A/J primary).
     - cron: "0 3 * * 2-6"
+    # Backup:  30 5 * * 2-6 ≈ 13:30 HKT Tue–Sat (after QQscan backup 15 4;
+    #          far from Fund Flow 15 20 UTC).
+    - cron: "30 5 * * 2-6"
   workflow_dispatch:
+
+concurrency:
+  group: etf-leaders-qqscan-f
+  cancel-in-progress: false
 
 jobs:
   etf-leaders:
+    # Skip failed/cancelled Daily ExtraScan; still run on schedule + dispatch.
+    if: >
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -24,4 +46,10 @@ jobs:
       - name: Scan ETF holdings → QQscan F
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-        run: python write_etf_leaders.py
+        run: |
+          set -euo pipefail
+          echo "event=${{ github.event_name }}"
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            echo "upstream=${{ github.event.workflow_run.name }} conclusion=${{ github.event.workflow_run.conclusion }} run_id=${{ github.event.workflow_run.id }}"
+          fi
+          python write_etf_leaders.py
