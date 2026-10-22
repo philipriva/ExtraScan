@@ -1,6 +1,14 @@
 name: QQscan to Sheet
 
 # Separate from Daily ExtraScan screen job — only fetches txt + writes QQscan A/J.
+#
+# Triggers (belt + suspenders + file-driven):
+# 1) schedule primary/backup — GitHub UTC cron (can delay/skip after YAML churn)
+# 2) workflow_dispatch — manual / API
+# 3) repository_dispatch type strong-stocks-updated — fired by my-stock-scanner
+#    after it publishes a new Strong_Stocks_V3_YYYYMMDD.txt (needs secret there)
+#
+# Scheduler resync: 2026-10-22 — disable/enable after this push if schedules stay quiet.
 on:
   schedule:
     # GitHub Actions cron is UTC only (no CRON_TZ). Schedules can delay or skip a day;
@@ -16,6 +24,18 @@ on:
     - cron: "30 2 * * 2-6"
     - cron: "15 4 * * 2-6"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Fetch newest Strong/Maggie only; do not write Sheet"
+        type: boolean
+        default: false
+  repository_dispatch:
+    # my-stock-scanner posts this after pushing Strong_Stocks_V3_*.txt
+    types: [strong-stocks-updated]
+
+concurrency:
+  group: qqscan-sheet
+  cancel-in-progress: false
 
 jobs:
   qqscan:
@@ -34,5 +54,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Primary may fire before a late publish; wait up to 15 min for today's file.
           # Backup cron (04:15 UTC) usually finds it immediately (wait still harmless).
+          # repository_dispatch usually runs right after Strong publish — Maggie is
+          # typically already on Q-scanner; wait covers a short Maggie lag.
           QQSCAN_WAIT_SECS: "900"
-        run: python write_qqscan.py
+        run: |
+          set -euo pipefail
+          EXTRA=()
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            EXTRA+=(--dry-run)
+          fi
+          echo "event=${{ github.event_name }} dry_run=${{ inputs.dry_run || 'n/a' }}"
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "dispatch_file=${{ github.event.client_payload.file || '' }}"
+          fi
+          python write_qqscan.py "${EXTRA[@]}"
