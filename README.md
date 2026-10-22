@@ -9,7 +9,7 @@
 | `yellowETF` | 預設 `etf_list.txt`；可選 `--all-etf-fund` 用全 Nasdaq ETF／fund | 黃燭 |
 | `whiteETF` | 同上 | 白圓 |
 
-與 [us-fundflow-tips-screener](https://github.com/philipriva/us-fundflow-tips-screener) 不同：此 repo **分開** 黃燭／白圓；ALL 宇宙 **不含** ETF／fund；ETF tabs **預設** curated `etf_list.txt`（待 Philip 決定是否改全 Nasdaq ETF／fund，用 `--all-etf-fund`）。寫入 Sheets（tips 只出 artifact `.txt`）。
+與 [us-fundflow-tips-screener](https://github.com/philipriva/us-fundflow-tips-screener) 不同：此 repo **分開** 黃燭／白圓；ALL 宇宙 **不含** ETF／fund；四個 tab 係 **四次獨立掃描**：ALL = 全美股剔 ETF／fund；ETF = **預設** curated `etf_list.txt`（可選 `--all-etf-fund` 先用全 Nasdaq ETF／fund）。唔好混宇宙。寫入 Sheets（tips 只出 artifact `.txt`）。
 
 ## Google Sheet
 
@@ -34,7 +34,7 @@
   - ≈ **Mon–Fri 16:15 EDT**（夏令；美股現金收市 16:00 ET +15m）  
   - 冬令 EST 請改為 `15 21 * * 1-5`（GitHub Actions cron **只支援 UTC**，無 `CRON_TZ`）
 - **手動**：Actions → *Daily ExtraScan* → Run workflow  
-  - 可勾 `etf_only`：只掃 Nasdaq ETF／fund 宇宙（跳過 ALL 股票）
+  - 可勾 `etf_only`：只掃 ETF tabs（預設 curated `etf_list.txt`；跳過 ALL 股票；唔清 ALL tabs）
 - **Artifact**：`extrascan_out`（四個 CSV + `download_stats.txt`），保留 14 日
 
 ### Secret
@@ -56,17 +56,13 @@
 
 ```bash
 pip install -r requirements.txt
-# 少數 symbols（四個 tab 都會寫同一批 hits）
+# 少數 symbols（smoke：四個 tab 都會寫同一批 hits）
 python run_extrascan.py --symbols AAPL,MSFT,SPY,QQQ
-# 只掃 curated etf_list.txt
+# 只掃 ETF tabs（預設 curated etf_list.txt；唔改 ALL tabs）
 python run_extrascan.py --etf-only
-# optional curated list only:
-# python run_extrascan.py --etf-only --fixed-etf-list
-# 可選：全 Nasdaq ETF/fund（未作預設，等確認）
-python run_extrascan.py --etf-only
-# optional curated list only:
-# python run_extrascan.py --etf-only --fixed-etf-list --all-etf-fund
-# 完整（全美 ex-ETF + curated ETF；需時很長）
+# 可選：ETF tabs 用全 Nasdaq ETF/fund（~6k；唔影響 ALL）
+python run_extrascan.py --etf-only --all-etf-fund
+# 完整（ALL=全美 ex-ETF + ETF=curated；需時很長）
 export GOOGLE_SERVICE_ACCOUNT_JSON="$(cat /path/to/sa.json)"
 python run_extrascan.py
 ```

@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 """GitHub Actions: ExtraScan — Fund Flow 日線 黃燭 / 白圓 → Google Sheet 四個 tab
 
-Tabs:
+Tabs (four distinct universes — do not mix):
   yellowALL     — 全美股（剔 ETF/fund）黃燭
   whiteballALL  — 全美股（剔 ETF/fund）白圓
-  yellowETF     — Nasdaq Trader ETF/fund 宇宙 黃燭（非固定名單）
-  whiteETF      — Nasdaq Trader ETF/fund 宇宙 白圓
+  yellowETF     — curated etf_list.txt 黃燭（預設；可選 --all-etf-fund）
+  whiteETF      — curated etf_list.txt 白圓（同上）
 
 Formula = us-fundflow-tips-screener / banker_entry fund_flow_hit (yellow / white_circle).
 TF = daily 1D; drop forming bar before 16:00 ET (Banker only_completed); auto_adjust=True.
@@ -182,8 +182,8 @@ def universe_us_ex_etf_fund() -> list[str]:
 def universe_us_etf_fund() -> list[str]:
     """Nasdaq Trader symbols that ARE ETF/fund (ETF=Y or fund-like name).
 
-    Complement of universe_us_ex_etf_fund. Used for yellowETF / whiteETF so
-    ETFs like SLYG/SPSM/XTN are included (not only curated etf_list.txt).
+    Complement of universe_us_ex_etf_fund. Opt-in for yellowETF / whiteETF
+    via --all-etf-fund only; default ETF tabs use curated etf_list.txt.
     """
     df = _nasdaq_trader_frames()
     keep: set[str] = set()
@@ -194,7 +194,7 @@ def universe_us_etf_fund() -> list[str]:
 
 
 def load_etf_list(path: Path) -> list[str]:
-    """Optional curated override when --fixed-etf-list is set."""
+    """Curated ETF/fund list (default universe for yellowETF / whiteETF)."""
     out, seen = [], set()
     for line in path.read_text(encoding="utf-8").splitlines():
         s = _norm_sym(line.split("#", 1)[0])
@@ -466,8 +466,8 @@ def main() -> int:
     ap.add_argument(
         "--etf-only",
         action="store_true",
-        help="Skip full-US equities scan; only screen Nasdaq ETF/fund universe "
-        "→ yellowETF/whiteETF (ALL tabs stay empty)",
+        help="Skip full-US equities scan; only screen ETF tabs "
+        "(default curated etf_list.txt → yellowETF/whiteETF; ALL tabs untouched on Sheets)",
     )
     ap.add_argument(
         "--skip-all-us",
@@ -477,13 +477,13 @@ def main() -> int:
     ap.add_argument(
         "--etf-list",
         default="etf_list.txt",
-        help="Curated ETF file used only with --fixed-etf-list",
+        help="Curated ETF file for yellowETF/whiteETF (default when --all-etf-fund is off)",
     )
     ap.add_argument(
-        "--fixed-etf-list",
+        "--all-etf-fund",
         action="store_true",
-        help="Use curated etf_list.txt instead of full Nasdaq ETF/fund universe "
-        "(BankerEntry篩選_new uses the full Nasdaq ETF/fund set)",
+        help="Screen full Nasdaq ETF/fund universe for ETF tabs only "
+        "(~6k; default is curated etf_list.txt). Does not change ALL equities universe.",
     )
     ap.add_argument(
         "--sheet-ids",
@@ -536,16 +536,16 @@ def main() -> int:
             us = universe_us_ex_etf_fund()
             yellow_all, white_all, st_us = screen_split(us, "all-US-ex-ETF")
             all_stats.append(st_us)
-        if args.fixed_etf_list:
-            if not etf_path.exists():
-                raise SystemExit(f"--fixed-etf-list set but missing file: {etf_path}")
-            etf = load_etf_list(etf_path)
-            etf_label = "fixed-ETF"
-        else:
-            # Same universe as banker_screener_app_new load_us_directory
-            # with exclude_etf_fund=False, then keep only etf_map True.
+        # ETF tabs are a separate scan from ALL (never share ALL's equity universe).
+        if args.all_etf_fund:
+            # Opt-in: same ~6k set as BankerEntry篩選_new load_us_directory etf_map.
             etf = universe_us_etf_fund()
             etf_label = "all-ETF-fund"
+        else:
+            if not etf_path.exists():
+                raise SystemExit(f"missing curated ETF list: {etf_path}")
+            etf = load_etf_list(etf_path)
+            etf_label = "fixed-ETF"
         print(f"ETF universe source={etf_label} n={len(etf)}", flush=True)
         yellow_etf, white_etf, st_etf = screen_split(etf, etf_label)
         all_stats.append(st_etf)
