@@ -3,19 +3,24 @@ name: QQscan to Sheet
 # Separate from Daily ExtraScan screen job — only fetches txt + writes QQscan A/J.
 on:
   schedule:
-    # GitHub Actions cron is UTC only (no CRON_TZ).
-    # Must run AFTER Q-scanner Maggiestocks_YYYYMMDD + my-stock-scanner Strong_Stocks_V3
-    # typically land (~01:52 UTC / ~09:52 HKT). Old "0 22 * * 1-5" was US close+2h but
-    # raced ahead of those publishes and wrote yesterday's files.
-    # 3 2 left only ~11 min after Maggie; widen to 30 2 (~38 min buffer).
-    # 30 2 * * 2-6 ≈ 10:30 HKT Tue–Sat (covers Mon–Fri US sessions).
+    # GitHub Actions cron is UTC only (no CRON_TZ). Schedules can delay or skip a day;
+    # keep a primary + backup so a miss does not leave Sheet on yesterday's Strong_Stocks.
+    #
+    # Upstream: Q-scanner Maggiestocks_YYYYMMDD + my-stock-scanner Strong_Stocks_V3
+    # typically land ~01:40–01:52 UTC (~09:40–09:52 HKT).
+    # Old "0 22 * * 1-5" raced ahead of those publishes and wrote yesterday's files.
+    #
+    # Primary: 30 2 * * 2-6 ≈ 10:30 HKT Tue–Sat (~38 min after typical publish).
+    # Backup:  15 4 * * 2-6 ≈ 12:15 HKT Tue–Sat (catch skipped/delayed primary;
+    #          still far from Fund Flow ExtraScan at 15 20 * * 1-5 UTC).
     - cron: "30 2 * * 2-6"
+    - cron: "15 4 * * 2-6"
   workflow_dispatch:
 
 jobs:
   qqscan:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,4 +32,7 @@ jobs:
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Primary may fire before a late publish; wait up to 15 min for today's file.
+          # Backup cron (04:15 UTC) usually finds it immediately (wait still harmless).
+          QQSCAN_WAIT_SECS: "900"
         run: python write_qqscan.py
