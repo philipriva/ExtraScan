@@ -7,7 +7,8 @@ import argparse
 import os
 import re
 import sys
-from datetime import date, timedelta
+import time
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import requests
@@ -89,6 +90,74 @@ def _latest_txt(owner_repo: str, prefix: str) -> tuple[str, str]:
         return _latest_via_raw_walk(owner_repo, prefix)
 
 
+def _file_date(name: str) -> date:
+    m = DATE_RE.search(name)
+    if not m:
+        raise ValueError(f"No YYYYMMDD in filename: {name}")
+    s = m.group(1)
+    return date(int(s[:4]), int(s[4:6]), int(s[6:8]))
+
+
+def _expected_min_date(now_utc: Optional[datetime] = None) -> date:
+    """Strong/Maggie dated files typically land ~01:40–01:52 UTC on calendar day D.
+
+    After 02:00 UTC we require file date >= today (UTC). Before that, yesterday is OK
+    (still inside the overnight publish window).
+    """
+    now = now_utc or datetime.now(timezone.utc)
+    d = now.date()
+    if now.hour < 2:
+        return d - timedelta(days=1)
+    return d
+
+
+def _assert_fresh(name: str, kind: str, *, allow_stale: bool) -> None:
+    got = _file_date(name)
+    need = _expected_min_date()
+    if got >= need:
+        return
+    msg = (
+        f"STALE {kind}: selected {name} (date {got.isoformat()}), "
+        f"need >={need.isoformat()} UTC. Upstream not published yet, or this run "
+        f"is too early / a missed prior schedule left Sheet on an old file."
+    )
+    if allow_stale:
+        print(f"WARNING: {msg}", flush=True)
+        return
+    raise RuntimeError(msg)
+
+
+def _latest_fresh(
+    owner_repo: str,
+    prefix: str,
+    kind: str,
+    *,
+    allow_stale: bool,
+    wait_secs: int,
+) -> tuple[str, str]:
+    """Pick newest dated txt; optionally wait for today's file before failing."""
+    deadline = time.time() + max(0, wait_secs)
+    last_err: Optional[BaseException] = None
+    while True:
+        name, url = _latest_txt(owner_repo, prefix)
+        try:
+            _assert_fresh(name, kind, allow_stale=allow_stale)
+            return name, url
+        except RuntimeError as exc:
+            last_err = exc
+            remaining = deadline - time.time()
+            if allow_stale or remaining <= 0:
+                raise
+            sleep_for = min(60.0, max(5.0, remaining))
+            print(
+                f"{exc} — retry in {sleep_for:.0f}s (wait budget {remaining:.0f}s left)…",
+                flush=True,
+            )
+            time.sleep(sleep_for)
+    assert last_err is not None
+    raise last_err
+
+
 def _fetch_symbols(download_url: str) -> list[str]:
     r = requests.get(download_url, headers=_headers(), timeout=60)
     r.raise_for_status()
@@ -99,6 +168,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(description="Write QQscan columns A and J from scanner txts")
     p.add_argument("--sheet-id", default=os.environ.get("EXTRASCAN_SHEET_ID", DEFAULT_SHEET_ID))
     p.add_argument("--dry-run", action="store_true", help="Fetch and print counts only")
+    p.add_argument(
+        "--allow-stale",
+        action="store_true",
+        help="Do not fail when newest file date is older than expected UTC day",
+    )
+    p.add_argument(
+        "--wait-secs",
+        type=int,
+        default=int(os.environ.get("QQSCAN_WAIT_SECS", "0")),
+        help="Seconds to poll for today's dated file before failing (env QQSCAN_WAIT_SECS)",
+    )
     args = p.parse_args(argv)
 
     sa = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
@@ -106,12 +186,41 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("ERROR: set GOOGLE_SERVICE_ACCOUNT_JSON", file=sys.stderr)
         return 2
 
-    strong_name, strong_url = _latest_txt(STRONG_REPO, STRONG_PREFIX)
-    maggie_name, maggie_url = _latest_txt(MAGGIE_REPO, MAGGIE_PREFIX)
+    allow_stale = args.allow_stale or os.environ.get("QQSCAN_ALLOW_STALE", "").strip() in (
+        "1",
+        "true",
+        "TRUE",
+        "yes",
+    )
+
+    try:
+        strong_name, strong_url = _latest_fresh(
+            STRONG_REPO,
+            STRONG_PREFIX,
+            "Strong_Stocks",
+            allow_stale=allow_stale,
+            wait_secs=args.wait_secs,
+        )
+        maggie_name, maggie_url = _latest_fresh(
+            MAGGIE_REPO,
+            MAGGIE_PREFIX,
+            "Maggiestocks",
+            allow_stale=allow_stale,
+            wait_secs=args.wait_secs,
+        )
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
+
     strong = _fetch_symbols(strong_url)
     maggie = _fetch_symbols(maggie_url)
     print(f"Source A: {STRONG_REPO}/{strong_name} n={len(strong)}", flush=True)
     print(f"Source J: {MAGGIE_REPO}/{maggie_name} n={len(maggie)}", flush=True)
+    print(
+        f"Freshness OK (UTC today={datetime.now(timezone.utc).date().isoformat()}, "
+        f"min={_expected_min_date().isoformat()})",
+        flush=True,
+    )
 
     if args.dry_run:
         print("dry-run OK", flush=True)
