@@ -200,6 +200,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         "yes",
     )
 
+    # Strong first — always land column A even if Maggie is late (do not couple the writes).
     try:
         strong_name, strong_url = _latest_fresh(
             STRONG_REPO,
@@ -208,14 +209,33 @@ def main(argv: Optional[list[str]] = None) -> int:
             allow_stale=allow_stale,
             wait_secs=args.wait_secs,
         )
-        # Strong often publishes a few minutes before Maggie (repository_dispatch races).
-        # Require Maggiestocks date >= Strong date so we wait instead of writing yesterday's J.
-        maggie_min = max(_expected_min_date(), _file_date(strong_name))
-        print(
-            f"Maggie freshness floor={maggie_min.isoformat()} "
-            f"(max of UTC gate + Strong {_file_date(strong_name).isoformat()})",
-            flush=True,
-        )
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
+
+    strong = _fetch_symbols(strong_url)
+    print(f"Source A: {STRONG_REPO}/{strong_name} n={len(strong)}", flush=True)
+    print(
+        f"Strong freshness OK (UTC today={datetime.now(timezone.utc).date().isoformat()}, "
+        f"min={_expected_min_date().isoformat()})",
+        flush=True,
+    )
+
+    if not args.dry_run:
+        n_a = write_column(sa, args.sheet_id, TAB, "A", strong)
+        print(f"QQscan A written n={n_a} file={strong_name}", flush=True)
+    else:
+        n_a = len(strong)
+
+    # Strong often publishes a few minutes before Maggie (repository_dispatch races).
+    # Require Maggiestocks date >= Strong date so we wait instead of writing yesterday's J.
+    maggie_min = max(_expected_min_date(), _file_date(strong_name))
+    print(
+        f"Maggie freshness floor={maggie_min.isoformat()} "
+        f"(max of UTC gate + Strong {_file_date(strong_name).isoformat()})",
+        flush=True,
+    )
+    try:
         maggie_name, maggie_url = _latest_fresh(
             MAGGIE_REPO,
             MAGGIE_PREFIX,
@@ -225,12 +245,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             min_date=maggie_min,
         )
     except RuntimeError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        # A is already current; leave J untouched for Maggiestocks dispatch / backup cron.
+        print(
+            f"ERROR: Maggie not ready after wait; column A already updated to {strong_name}. {exc}",
+            file=sys.stderr,
+        )
         return 3
 
-    strong = _fetch_symbols(strong_url)
     maggie = _fetch_symbols(maggie_url)
-    print(f"Source A: {STRONG_REPO}/{strong_name} n={len(strong)}", flush=True)
     print(f"Source J: {MAGGIE_REPO}/{maggie_name} n={len(maggie)}", flush=True)
     print(
         f"Freshness OK (UTC today={datetime.now(timezone.utc).date().isoformat()}, "
@@ -242,7 +264,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("dry-run OK", flush=True)
         return 0
 
-    n_a = write_column(sa, args.sheet_id, TAB, "A", strong)
     n_j = write_column(sa, args.sheet_id, TAB, "J", maggie)
     print(f"QQscan done A={n_a} J={n_j}", flush=True)
     return 0

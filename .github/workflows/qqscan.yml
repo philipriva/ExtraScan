@@ -5,10 +5,11 @@ name: QQscan to Sheet
 # Triggers (belt + suspenders + file-driven):
 # 1) schedule primary/backup — GitHub UTC cron (can delay/skip after YAML churn)
 # 2) workflow_dispatch — manual / API
-# 3) repository_dispatch type strong-stocks-updated — fired by my-stock-scanner
-#    after it publishes a new Strong_Stocks_V3_YYYYMMDD.txt (needs secret there)
+# 3) repository_dispatch strong-stocks-updated — my-stock-scanner after Strong_Stocks_V3_*.txt
+# 4) repository_dispatch maggiestocks-updated — Q-scanner after Maggiestocks_*.txt
+#    (both need EXTRASCAN_DISPATCH_TOKEN on the source repo)
 #
-# Scheduler resync: 2026-10-22 — disable/enable after this push if schedules stay quiet.
+# Scheduler resync: 2026-10-23 — comment bump to re-register crons after YAML churn skips.
 on:
   schedule:
     # GitHub Actions cron is UTC only (no CRON_TZ). Schedules can delay or skip a day;
@@ -21,6 +22,7 @@ on:
     # Primary: 30 2 * * 2-6 ≈ 10:30 HKT Tue–Sat (~38 min after typical publish).
     # Backup:  15 4 * * 2-6 ≈ 12:15 HKT Tue–Sat (catch skipped/delayed primary;
     #          still far from Fund Flow ExtraScan at 15 20 * * 1-5 UTC).
+    # File-driven: Strong + Maggie repository_dispatch write A/J without waiting on cron.
     - cron: "30 2 * * 2-6"
     - cron: "15 4 * * 2-6"
   workflow_dispatch:
@@ -30,8 +32,9 @@ on:
         type: boolean
         default: false
   repository_dispatch:
-    # my-stock-scanner posts this after pushing Strong_Stocks_V3_*.txt
-    types: [strong-stocks-updated]
+    # my-stock-scanner → strong-stocks-updated after Strong_Stocks_V3_*.txt
+    # Q-scanner → maggiestocks-updated after Maggiestocks_*.txt (needs same PAT secret)
+    types: [strong-stocks-updated, maggiestocks-updated]
 
 concurrency:
   group: qqscan-sheet
@@ -52,10 +55,9 @@ jobs:
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Wait up to 15 min for dated files. Strong repository_dispatch often fires
-          # a few minutes before Maggiestocks_YYYYMMDD lands; write_qqscan requires
-          # Maggie date >= Strong date so it polls instead of writing yesterday's J.
-          # Backup cron (04:15 UTC) is a second catch if wait still expires.
+          # Wait up to 15 min for dated files. write_qqscan writes column A as soon as
+          # Strong is fresh, then polls for Maggiestocks date >= Strong date (so J is not
+          # yesterday). Maggiestocks repository_dispatch / backup cron catch late J.
           QQSCAN_WAIT_SECS: "900"
         run: |
           set -euo pipefail
