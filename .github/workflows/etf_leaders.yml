@@ -1,6 +1,6 @@
 name: ETF Leaders to QQscan G+H
 
-# G: yellowETF+whiteETF union → Schwab holdings + yfinance filter → QQscan column G.
+# G: yellowETF∪whiteETF ETF tickers always + holdings that pass filter → QQscan column G.
 # H: yellowALL+whiteballALL union → QQscan column H (Sheets-only, no Schwab).
 # Reuses GOOGLE_SERVICE_ACCOUNT_JSON. Does not touch Fund Flow tabs / QQscan A·J.
 # Stops writing F (prior F left uncleared).

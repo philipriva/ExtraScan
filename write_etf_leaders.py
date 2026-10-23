@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Read ExtraScan ETF/ALL tabs → QQscan G (holdings leaders) + H (ALL union).
+"""Read ExtraScan ETF/ALL tabs → QQscan G (ETF tickers ∪ holdings leaders) + H (ALL union).
 
-G: whiteETF ∪ yellowETF → Schwab holdings + yfinance filter → QQscan!G
+G: whiteETF ∪ yellowETF ETF symbols always included, plus Schwab holdings
+   that pass the yfinance filter → QQscan!G
 H: whiteballALL ∪ yellowALL → QQscan!H (no holdings scrape)
 
 Financial conditions match Philip's local script exactly — do not invent logic.
@@ -295,7 +296,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 1
 
-    all_leaders: set[str] = set()
+    # Always include the ETF tickers themselves in G (even if no holdings pass).
+    all_leaders: set[str] = set(etf_list)
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         context = browser.new_context(
@@ -333,7 +335,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         browser.close()
 
     leaders_sorted = sorted(all_leaders)
-    print(f"\n📊 Unique leaders across ETFs: {len(leaders_sorted)}", flush=True)
+    etf_only = sorted(set(etf_list))
+    holdings_only = sorted(all_leaders - set(etf_list))
+    print(
+        f"\n📊 QQscan G = ETF tickers ({len(etf_only)}) ∪ holdings leaders "
+        f"({len(holdings_only)}) → unique {len(leaders_sorted)}",
+        flush=True,
+    )
+    print(f"ETF tickers in G: {', '.join(etf_only) or '(none)'}", flush=True)
+    print(f"Holdings leaders: {len(holdings_only)}", flush=True)
     for s in leaders_sorted[:50]:
         print(s, flush=True)
     if len(leaders_sorted) > 50:
