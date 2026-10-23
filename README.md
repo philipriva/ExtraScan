@@ -74,7 +74,7 @@ python run_extrascan.py
 | `run_extrascan.py` | 主程式 |
 | `sheets_writer.py` | gspread 覆寫 tab |
 | `write_qqscan.py` | Strong_Stocks + Maggiestocks → QQscan A/J |
-| `write_etf_leaders.py` | yellowETF/whiteETF → Schwab holdings leaders → QQscan F |
+| `write_etf_leaders.py` | yellowETF/whiteETF → holdings leaders → QQscan G; yellowALL∪whiteballALL → QQscan H |
 | `sheet_ids.json` | spreadsheet / folder id |
 | `etf_list.txt` | 預設 curated ETF 名單（`--all-etf-fund` 可改全宇宙） |
 
@@ -92,20 +92,21 @@ python write_qqscan.py --dry-run
 GOOGLE_SERVICE_ACCOUNT_JSON='...' python write_qqscan.py
 ```
 
-## QQscan column F — ETF holdings leaders
+## QQscan columns G + H — ETF holdings leaders + ALL Fund Flow union
 
-Separate workflow [`.github/workflows/etf_leaders.yml`](.github/workflows/etf_leaders.yml) (`ETF Leaders to QQscan F`):
+Separate workflow [`.github/workflows/etf_leaders.yml`](.github/workflows/etf_leaders.yml) (`ETF Leaders to QQscan G+H`):
 
-- **Schedule:** `0 3 * * 2-6` UTC ≈ **11:00 HKT** Tue–Sat (~30 min after QQscan A/J; well after Fund Flow ~04:15 HKT).
-- **Input:** union of symbols in `yellowETF` + `whiteETF` column A (from Daily ExtraScan Fund Flow).
-- **Process:** Playwright scrape Schwab ETF holdings pages (no login), then yfinance filter holdings where `price > EMA200` **and** `EMA50 > EMA200` **and** `price >= 0.90 * ATH` (same conditions as Philip's local script).
-- **Output:** sorted unique leader tickers → `QQscan` **column F** (clear+overwrite, headerless like A/J).
-- **Secret:** reuses `GOOGLE_SERVICE_ACCOUNT_JSON` (no new secrets).
+- **Triggers:** `workflow_run` after Daily ExtraScan success; crons `0 3` / `30 5` UTC Tue–Sat; `workflow_dispatch`.
+- **Column G:** union of `yellowETF` + `whiteETF` → Schwab holdings (Playwright) → yfinance filter (`price > EMA200` **and** `EMA50 > EMA200` **and** `price >= 0.90 * ATH`, Philip's script). Sorted unique → `QQscan!G` (clear+overwrite). Does **not** mix ALL tabs into G.
+- **Column H:** union of `yellowALL` + `whiteballALL` (stock Fund Flow hits) → `QQscan!H` (clear+overwrite). Sheets-only; no Schwab. Does **not** mix ETF tabs into H.
+- **Column F:** no longer written (prior F values left uncleared).
+- **Secret:** reuses `GOOGLE_SERVICE_ACCOUNT_JSON`. Four ExtraScan tabs stay separate universes.
 
 ```bash
 pip install -r requirements.txt && playwright install chromium
 GOOGLE_SERVICE_ACCOUNT_JSON='...' python write_etf_leaders.py --dry-run
 GOOGLE_SERVICE_ACCOUNT_JSON='...' python write_etf_leaders.py
-# smoke with override:
-GOOGLE_SERVICE_ACCOUNT_JSON='...' python write_etf_leaders.py --etfs XBI,XPH --dry-run
+# H only / G only:
+GOOGLE_SERVICE_ACCOUNT_JSON='...' python write_etf_leaders.py --skip-g
+GOOGLE_SERVICE_ACCOUNT_JSON='...' python write_etf_leaders.py --skip-h --etfs XBI,XPH --dry-run
 ```

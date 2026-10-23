@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Read yellowETF + whiteETF from ExtraScan Sheet, scrape Schwab holdings,
-filter leaders (price>EMA200 & EMA50>EMA200 & price>=0.90*ATH), write QQscan!F.
+"""Read ExtraScan ETF/ALL tabs → QQscan G (holdings leaders) + H (ALL union).
+
+G: whiteETF ∪ yellowETF → Schwab holdings + yfinance filter → QQscan!G
+H: whiteballALL ∪ yellowALL → QQscan!H (no holdings scrape)
 
 Financial conditions match Philip's local script exactly — do not invent logic.
+Does not touch QQscan A/J. Stops writing F (leaves prior F values uncleared).
 """
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import time
@@ -29,6 +31,7 @@ from sheets_writer import write_column, _client
 DEFAULT_SHEET_ID = "1FSOmey7ALHFuYXxZSgjZnjWA5zpmbiv48PWAJD_yYRk"
 TAB_QQ = "QQscan"
 ETF_TABS = ("yellowETF", "whiteETF")
+ALL_TABS = ("yellowALL", "whiteballALL")
 
 
 def _read_col_a(sa_json: str, spreadsheet_id: str, tab: str) -> list[str]:
@@ -182,9 +185,27 @@ def scrape_etf_holdings(page, etf_symbol: str) -> list[str]:
     return list(set(all_symbols))
 
 
+def write_all_union_h(sa: str, sheet_id: str, dry_run: bool) -> list[str]:
+    """H = sorted unique whiteballALL ∪ yellowALL (stock Fund Flow hits)."""
+    yellow = _read_col_a(sa, sheet_id, "yellowALL")
+    white = _read_col_a(sa, sheet_id, "whiteballALL")
+    union = sorted(set(yellow) | set(white))
+    print(
+        f"H source: yellowALL={len(yellow)} whiteballALL={len(white)} "
+        f"union={len(union)}",
+        flush=True,
+    )
+    if dry_run:
+        print(f"dry-run H preview first 20: {union[:20]}", flush=True)
+        return union
+    n_h = write_column(sa, sheet_id, TAB_QQ, "H", union)
+    print(f"QQscan H written n={n_h}", flush=True)
+    return union
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(
-        description="ETF holdings strength → QQscan column F"
+        description="ETF holdings → QQscan G; ALL Fund Flow union → QQscan H"
     )
     p.add_argument(
         "--sheet-id",
@@ -193,18 +214,28 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument(
         "--dry-run",
         action="store_true",
-        help="Read ETFs + scan; print leaders; do not write Sheet",
+        help="Read tabs + scan; print results; do not write Sheet",
     )
     p.add_argument(
         "--etfs",
         default="",
-        help="Comma-separated ETF override (skip Sheet read)",
+        help="Comma-separated ETF override for G only (skip Sheet ETF tabs)",
+    )
+    p.add_argument(
+        "--skip-h",
+        action="store_true",
+        help="Do not write column H (G only)",
+    )
+    p.add_argument(
+        "--skip-g",
+        action="store_true",
+        help="Do not scrape/write column G (H only)",
     )
     p.add_argument(
         "--checkpoint-every",
         type=int,
         default=25,
-        help="Write QQscan!F every N ETFs so a timeout keeps partial leaders (0=only at end)",
+        help="Write QQscan!G every N ETFs so a timeout keeps partial leaders (0=only at end)",
     )
     args = p.parse_args(argv)
 
@@ -216,6 +247,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("ERROR: set GOOGLE_SERVICE_ACCOUNT_JSON to write", file=sys.stderr)
         return 2
 
+    # --- Column H first (fast Sheets-only) ---
+    if not args.skip_h:
+        if not sa and not args.dry_run:
+            print("ERROR: SA required for H", file=sys.stderr)
+            return 2
+        if sa:
+            write_all_union_h(sa, args.sheet_id, args.dry_run)
+        else:
+            print("skip H: no SA in dry-run without Sheet read", flush=True)
+
+    if args.skip_g:
+        print("skip G requested; done", flush=True)
+        return 0
+
+    # --- Column G: ETF holdings leaders ---
     if args.etfs.strip():
         etf_list = [
             s.strip().upper()
@@ -234,10 +280,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
 
     if not etf_list:
-        print("No ETF symbols; clearing QQscan!F", flush=True)
+        print("No ETF symbols; clearing QQscan!G", flush=True)
         if not args.dry_run:
-            n = write_column(sa, args.sheet_id, TAB_QQ, "F", [])
-            print(f"QQscan F cleared n={n}", flush=True)
+            n = write_column(sa, args.sheet_id, TAB_QQ, "G", [])
+            print(f"QQscan G cleared n={n}", flush=True)
         return 0
 
     try:
@@ -278,9 +324,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                 and (i % every == 0 or i == len(etf_list))
             ):
                 partial = sorted(all_leaders)
-                n_f = write_column(sa, args.sheet_id, TAB_QQ, "F", partial)
+                n_g = write_column(sa, args.sheet_id, TAB_QQ, "G", partial)
                 print(
-                    f"checkpoint QQscan F={n_f} after {i}/{len(etf_list)} ETFs",
+                    f"checkpoint QQscan G={n_g} after {i}/{len(etf_list)} ETFs",
                     flush=True,
                 )
 
@@ -294,12 +340,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"... +{len(leaders_sorted) - 50} more", flush=True)
 
     if args.dry_run:
-        print("dry-run OK (no Sheet write)", flush=True)
+        print("dry-run OK (no Sheet write for G)", flush=True)
         return 0
 
-    # Final write (idempotent if last checkpoint already wrote the full set)
-    n_f = write_column(sa, args.sheet_id, TAB_QQ, "F", leaders_sorted)
-    print(f"QQscan done F={n_f}", flush=True)
+    n_g = write_column(sa, args.sheet_id, TAB_QQ, "G", leaders_sorted)
+    print(f"QQscan done G={n_g}", flush=True)
     return 0
 
 

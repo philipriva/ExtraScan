@@ -1,14 +1,16 @@
-name: ETF Leaders to QQscan F
+name: ETF Leaders to QQscan G+H
 
-# yellowETF+whiteETF union → Schwab holdings + yfinance filter → QQscan column F.
-# Reuses GOOGLE_SERVICE_ACCOUNT_JSON. Does not touch Fund Flow / QQscan A·J / IC.
+# G: yellowETF+whiteETF union → Schwab holdings + yfinance filter → QQscan column G.
+# H: yellowALL+whiteballALL union → QQscan column H (Sheets-only, no Schwab).
+# Reuses GOOGLE_SERVICE_ACCOUNT_JSON. Does not touch Fund Flow tabs / QQscan A·J.
+# Stops writing F (prior F left uncleared).
 #
 # Triggers (belt + suspenders + after Fund Flow):
-# 1) workflow_run — after Daily ExtraScan succeeds (fresh yellow/white)
+# 1) workflow_run — after Daily ExtraScan succeeds (fresh yellow/white + ALL)
 # 2) schedule primary/backup — GitHub UTC cron (can delay/skip after YAML churn)
 # 3) workflow_dispatch — manual / API
 #
-# Scheduler resync: 2026-10-22 — disable/enable after this push if schedules stay quiet.
+# Scheduler resync: 2026-10-23 — G/H retarget after Philip request.
 # Avoid colliding Fund Flow 15 20 and QQscan 30 2 / 15 4.
 on:
   workflow_run:
@@ -23,7 +25,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: etf-leaders-qqscan-f
+  group: etf-leaders-qqscan-gh
   cancel-in-progress: false
 
 jobs:
@@ -43,7 +45,7 @@ jobs:
         run: |
           pip install -r requirements.txt
           playwright install --with-deps chromium
-      - name: Scan ETF holdings → QQscan F
+      - name: Scan → QQscan G + H
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: |
