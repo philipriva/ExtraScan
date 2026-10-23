@@ -52,10 +52,10 @@ jobs:
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Primary may fire before a late publish; wait up to 15 min for today's file.
-          # Backup cron (04:15 UTC) usually finds it immediately (wait still harmless).
-          # repository_dispatch usually runs right after Strong publish — Maggie is
-          # typically already on Q-scanner; wait covers a short Maggie lag.
+          # Wait up to 15 min for dated files. Strong repository_dispatch often fires
+          # a few minutes before Maggiestocks_YYYYMMDD lands; write_qqscan requires
+          # Maggie date >= Strong date so it polls instead of writing yesterday's J.
+          # Backup cron (04:15 UTC) is a second catch if wait still expires.
           QQSCAN_WAIT_SECS: "900"
         run: |
           set -euo pipefail

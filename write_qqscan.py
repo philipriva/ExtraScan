@@ -111,9 +111,15 @@ def _expected_min_date(now_utc: Optional[datetime] = None) -> date:
     return d
 
 
-def _assert_fresh(name: str, kind: str, *, allow_stale: bool) -> None:
+def _assert_fresh(
+    name: str,
+    kind: str,
+    *,
+    allow_stale: bool,
+    min_date: Optional[date] = None,
+) -> None:
     got = _file_date(name)
-    need = _expected_min_date()
+    need = min_date if min_date is not None else _expected_min_date()
     if got >= need:
         return
     msg = (
@@ -134,14 +140,15 @@ def _latest_fresh(
     *,
     allow_stale: bool,
     wait_secs: int,
+    min_date: Optional[date] = None,
 ) -> tuple[str, str]:
-    """Pick newest dated txt; optionally wait for today's file before failing."""
+    """Pick newest dated txt; optionally wait until file date >= min_date."""
     deadline = time.time() + max(0, wait_secs)
     last_err: Optional[BaseException] = None
     while True:
         name, url = _latest_txt(owner_repo, prefix)
         try:
-            _assert_fresh(name, kind, allow_stale=allow_stale)
+            _assert_fresh(name, kind, allow_stale=allow_stale, min_date=min_date)
             return name, url
         except RuntimeError as exc:
             last_err = exc
@@ -201,12 +208,21 @@ def main(argv: Optional[list[str]] = None) -> int:
             allow_stale=allow_stale,
             wait_secs=args.wait_secs,
         )
+        # Strong often publishes a few minutes before Maggie (repository_dispatch races).
+        # Require Maggiestocks date >= Strong date so we wait instead of writing yesterday's J.
+        maggie_min = max(_expected_min_date(), _file_date(strong_name))
+        print(
+            f"Maggie freshness floor={maggie_min.isoformat()} "
+            f"(max of UTC gate + Strong {_file_date(strong_name).isoformat()})",
+            flush=True,
+        )
         maggie_name, maggie_url = _latest_fresh(
             MAGGIE_REPO,
             MAGGIE_PREFIX,
             "Maggiestocks",
             allow_stale=allow_stale,
             wait_secs=args.wait_secs,
+            min_date=maggie_min,
         )
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -218,7 +234,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"Source J: {MAGGIE_REPO}/{maggie_name} n={len(maggie)}", flush=True)
     print(
         f"Freshness OK (UTC today={datetime.now(timezone.utc).date().isoformat()}, "
-        f"min={_expected_min_date().isoformat()})",
+        f"min={_expected_min_date().isoformat()}, maggie_min={maggie_min.isoformat()})",
         flush=True,
     )
 
