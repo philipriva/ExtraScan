@@ -131,3 +131,23 @@ python write_zhuli_lm.py --dry-run --symbols AAPL,MSFT
 GOOGLE_SERVICE_ACCOUNT_JSON='...' python write_zhuli_lm.py
 ```
 
+## Pulse events (Market Pulse theme timing)
+
+Daily post-close screener over **MS145 proxy + radar patches + macro sleeve** → Google Sheet **[MS145 Pulse events](https://docs.google.com/spreadsheets/d/11ew_PpHdAnFDn6TWTsGp8qX7GXoYxQOtpvIt_DHmqZ8/edit)**.
+
+| Tab | Contents |
+|-----|----------|
+| `events` | Header + trigger-day rows: `asof | ticker | signal | signal_date | tf` |
+| `universe` | `pulse_universe.csv` (ticker, layer, …) |
+
+Signals: `white_ball` | `yellow_candle` | `zhuli_cross_up_D` | `zhuli_cross_up_W` | `mcdx_golden_D`  
+(only the day the signal fires — not ongoing bullish state).
+
+- Script: `write_pulse_events.py`
+- Universe: `pulse_universe.csv` (layer = ms145 / radar / macro; USD = **UUP**)
+- Workflow: `.github/workflows/pulse_events.yml` — cron `50 21 * * 1-5` UTC (+ backup `40 0 * * 2-6`)
+- Reuses secret `GOOGLE_SERVICE_ACCOUNT_JSON`
+- Manual: Actions → *Pulse events to Sheet* → Run workflow (optional refresh universe tab)
+
+Formulas: Fund Flow yellow/white = ExtraScan; zhuli = `write_zhuli_lm` (no stock filters on this ETF universe); MCDX golden = Pine Craft (`sPC` cross above `sLC`).
+

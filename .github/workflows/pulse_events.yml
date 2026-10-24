@@ -1,0 +1,56 @@
+name: Pulse events to Sheet
+
+# Daily Market Pulse theme-timing event table.
+# Schema: asof|ticker|signal|signal_date|tf (trigger-day only).
+# Universe: pulse_universe.csv (MS145 + radar + macro). Reuses GOOGLE_SERVICE_ACCOUNT_JSON.
+#
+# Schedule: after US cash settle (same window as zhuli L/M).
+on:
+  schedule:
+    # Mon–Fri 21:50 UTC ≈ 17:50 EDT (US close 16:00 + ~1h50)
+    - cron: "50 21 * * 1-5"
+    # Backup: Tue–Sat 00:40 UTC
+    - cron: "40 0 * * 2-6"
+  workflow_dispatch:
+    inputs:
+      refresh_universe:
+        description: "Also overwrite universe tab from pulse_universe.csv"
+        type: boolean
+        default: false
+
+concurrency:
+  group: pulse-events-sheet
+  cancel-in-progress: false
+
+jobs:
+  pulse-events:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Screen → events tab
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          PULSE_SHEET_ID: "11ew_PpHdAnFDn6TWTsGp8qX7GXoYxQOtpvIt_DHmqZ8"
+        run: |
+          set -euo pipefail
+          echo "event=${{ github.event_name }}"
+          EXTRA=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.refresh_universe }}" = "true" ]; then
+            EXTRA="--refresh-universe"
+          fi
+          python write_pulse_events.py --out-csv out/pulse_events.csv $EXTRA
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulse_events_out
+          path: |
+            out/pulse_events.csv
+          if-no-files-found: ignore
+          retention-days: 14

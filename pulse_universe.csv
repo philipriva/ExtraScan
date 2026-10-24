@@ -1,0 +1,135 @@
+ticker,layer,group_or_role,name,note
+XLF,ms145,Finance-Blnkcheck,Financial Select Sector,proxy
+SPY,ms145,Finance-Etf/Etn,SPDR S&P 500,proxy
+XLE,ms145,Oil&Gas-Refin/Mktg,Energy Select Sector,proxy
+XLI,ms145,Commsvc-Staffng,Industrial Select Sector,proxy
+IYT,ms145,Oil&Gas-Shipping,iShares US Transportation,proxy
+XLK,ms145,Compsftwr-Hrdwr,Technology Select Sector,proxy
+XBI,ms145,Med-Research,SPDR S&P Biotech,dedicated
+IHF,ms145,Medical-Svcs,iShares US Healthcare Providers,dedicated
+HACK,ms145,Compsftwr-Secur,Amplify Cybersecurity,dedicated
+IHI,ms145,Compsftwr-Med,iShares US Medical Devices,proxy
+VOX,ms145,Telecm-Cnsmrprds,Vanguard Communication Services,proxy
+IGV,ms145,Compsftwr-Enterprise,iShares Expanded Tech-Software,dedicated
+BLOK,ms145,Finance-Crypto,Amplify Blockchain Technology,dedicated
+SKYY,ms145,Compsftwr-Netwrk,First Trust Cloud Computing,dedicated
+XHB,ms145,Retail-Homfurn,SPDR S&P Homebuilders,dedicated
+XSD,ms145,Elec-Semicfablss,SPDR S&P Semiconductor,dedicated
+IAI,ms145,Finance-Invbnk,iShares US Broker-Dealers,dedicated
+SMH,ms145,Elec-Semic/Mfg,VanEck Semiconductor,dedicated
+IYZ,ms145,Telecm-Intrastrc,iShares US Telecommunications,dedicated
+EUFN,ms145,Banks-Foreign,iShares MSCI Europe Financials,proxy
+XLY,ms145,Hsehold/Applianc,Consumer Discretionary Select,proxy
+KBWB,ms145,Banks-Monycntr,Invesco KBW Bank,dedicated
+IBB,ms145,Med-Proftbio,iShares Biotechnology,dedicated
+XPH,ms145,Medical-Pharma,SPDR S&P Pharmaceuticals,dedicated
+SOXX,ms145,Electronic-Parts,iShares Semiconductor,proxy
+XME,ms145,Steel-Producers,SPDR S&P Metals & Mining,proxy
+MSOS,ms145,Cannabis,AdvisorShares Pure US Cannabis,dedicated
+IPAY,ms145,Finance-Crdcard,Amplify Digital Payments,dedicated
+XOP,ms145,Oil&Gas-Explo/Prodc,SPDR S&P Oil & Gas E&P,dedicated
+XLP,ms145,Beverage-Non-Alcohol,Consumer Staples Select,proxy
+RSP,ms145,Diversoperatns,Invesco S&P 500 Equal Weight,proxy
+KIE,ms145,Insurance,SPDR S&P Insurance,dedicated
+BIZD,ms145,Finance-Comloan,VanEck BDC Income,dedicated
+KRE,ms145,Banks-Regional,SPDR S&P Regional Banking,dedicated
+AMLP,ms145,Oil&Gas-Pipeline,Alerian MLP,dedicated
+GDX,ms145,Mining-Gold/Silvr,VanEck Gold Miners,dedicated
+ONLN,ms145,Retail-Internet,ProShares Online Retail,dedicated
+JETS,ms145,Trnsport-Airline,US Global Jets,dedicated
+XRT,ms145,Retail-Specialty,SPDR S&P Retail,dedicated
+XLB,ms145,Paper&Paprprods,Materials Select Sector,proxy
+FDN,ms145,Internet-Content,First Trust Dow Jones Internet,dedicated
+IXP,ms145,Telecmsvcs-Forgn,iShares Global Comm Services,proxy
+ESPO,ms145,Compsftwr-Gaming,VanEck Video Gaming eSports,dedicated
+XLC,ms145,Media,Communication Services Select,dedicated
+XHS,ms145,Med-Distributn,SPDR S&P Health Care Services,dedicated
+VNQ,ms145,Reits,Vanguard Real Estate,dedicated
+GRID,ms145,Electrcl-Powreqp,First Trust Clean Edge Smart Grid,dedicated
+DRIV,ms145,Automakers,Global X Autonomous & Electric Vehicles,dedicated
+MOO,ms145,Agriculturalops,VanEck Agribusiness,dedicated
+OIH,ms145,Oil&Gas-Drilling,VanEck Oil Services,dedicated
+ICLN,ms145,Pollutioncntrl,iShares Global Clean Energy,proxy
+PEJ,ms145,Leisure-Trvlbook,Invesco Leisure & Entertainment,proxy
+PBJ,ms145,Food-Foodstuffs,Invesco Food & Beverage,dedicated
+IDRV,ms145,Auto/Truck Parts,iShares Self-Driving EV and Tech,proxy
+PAVE,ms145,Bldg-Heavyconst,Global X US Infrastructure Dev,dedicated
+XLU,ms145,Utilities,Utilities Select Sector,dedicated
+XAR,ms145,Aerospc/Defnse,SPDR S&P Aerospace & Defense,dedicated
+ITB,ms145,Bldg-Residential/Comml,iShares US Home Construction,dedicated
+FINX,ms145,Compsftwr-Financial,Global X FinTech,dedicated
+REM,ms145,Finance-Mortg,iShares Mortgage Real Estate,dedicated
+TAN,ms145,Energy-Solar,Invesco Solar,dedicated
+QQQ,radar,B_market_radar,Invesco QQQ,index
+IWM,radar,B_market_radar,iShares Russell 2000,index
+DIA,radar,B_market_radar,SPDR Dow Jones Industrial Average,index
+QQQE,radar,B_market_radar,Direxion NASDAQ-100 Equal Weight,index
+FFTY,radar,B_market_radar,Innovator IBD 50,momentum
+SQQQ,radar,B_market_radar,ProShares UltraPro Short QQQ,lev_inv
+SPXU,radar,B_market_radar,ProShares UltraPro Short S&P 500,lev_inv
+PSJ,radar,B_market_radar,Invesco Software,theme
+CLOU,radar,B_market_radar,Global X Cloud Computing,theme
+BUG,radar,B_market_radar,Global X Cybersecurity,theme
+CIBR,radar,B_market_radar,First Trust NASDAQ Cybersecurity,theme
+IBUY,radar,B_market_radar,Amplify Online Retail,theme
+BOTZ,radar,B_market_radar,Global X Robotics & AI,theme
+ROBO,radar,B_market_radar,ROBO Global Robotics & Automation,theme
+ARKK,radar,B_market_radar,ARK Innovation,theme
+SOCL,radar,B_market_radar,Global X Social Media,theme
+CNRG,radar,B_market_radar,SPDR S&P Kensho Clean Power,theme
+PRNT,radar,B_market_radar,3D Printing,theme
+XLV,radar,B_market_radar,Health Care Select Sector,sector
+XHE,radar,B_market_radar,SPDR S&P Health Care Equipment,theme
+ARKG,radar,B_market_radar,ARK Genomic Revolution,theme
+KBE,radar,B_market_radar,SPDR S&P Bank,theme
+XES,radar,B_market_radar,SPDR S&P Oil & Gas Equipment & Services,theme
+FCG,radar,B_market_radar,First Trust Natural Gas,theme
+CRAK,radar,B_market_radar,VanEck Oil Refiners,theme
+PBW,radar,B_market_radar,Invesco WilderHill Clean Energy,theme
+ITA,radar,B_market_radar,iShares US Aerospace & Defense,theme
+PPA,radar,B_market_radar,Invesco Aerospace & Defense,theme
+HERO,radar,B_market_radar,Global X Video Games & Esports,theme
+MJ,radar,B_market_radar,Amplify Alternative Harvest,theme
+BETZ,radar,B_market_radar,Roundhill Sports Betting & iGaming,theme
+KARS,radar,B_market_radar,KraneShares Electric Vehicles & Future Mobility,theme
+BATT,radar,B_market_radar,Amplify Lithium & Battery Technology,theme
+SLX,radar,B_market_radar,VanEck Steel,theme
+COPX,radar,B_market_radar,Global X Copper Miners,theme
+PICK,radar,B_market_radar,iShares MSCI Global Metals & Mining Producers,theme
+WOOD,radar,B_market_radar,iShares Global Timber & Forestry,theme
+URA,radar,B_market_radar,Global X Uranium,theme
+GDXJ,radar,B_market_radar,VanEck Junior Gold Miners,theme
+REMX,radar,B_market_radar,VanEck Rare Earth/Strategic Metals,theme
+SIL,radar,B_market_radar,Global X Silver Miners,theme
+REET,radar,B_market_radar,iShares Global REIT,theme
+SRVR,radar,B_market_radar,Pacer Data & Digital Revolution,theme
+INDS,radar,B_market_radar,Pacer Industrial Real Estate,theme
+IEF,radar,B_market_radar,iShares 7-10 Year Treasury Bond,rates
+SHY,radar,B_market_radar,iShares 1-3 Year Treasury Bond,rates
+BND,radar,B_market_radar,Vanguard Total Bond Market,rates
+LQD,radar,B_market_radar,iShares iBoxx $ Investment Grade Corporate Bond,credit
+JNK,radar,B_market_radar,SPDR Bloomberg High Yield Bond,credit
+MUB,radar,B_market_radar,iShares National Muni Bond,credit
+FXE,radar,B_market_radar,Invesco CurrencyShares Euro,fx
+FXB,radar,B_market_radar,Invesco CurrencyShares British Pound,fx
+FXY,radar,B_market_radar,Invesco CurrencyShares Japanese Yen,fx
+CORN,radar,B_market_radar,Teucrium Corn,commodity
+WEAT,radar,B_market_radar,Teucrium Wheat,commodity
+SOYB,radar,B_market_radar,Teucrium Soybean,commodity
+DBA,radar,B_market_radar,Invesco DB Agriculture,commodity
+DBC,radar,B_market_radar,Invesco DB Commodity Index Tracking,commodity
+GCC,radar,B_market_radar,WisdomTree Continuous Commodity,commodity
+UNG,radar,B_market_radar,United States Natural Gas,commodity
+EWJ,radar,B_market_radar,iShares MSCI Japan,country
+EWG,radar,B_market_radar,iShares MSCI Germany,country
+EWU,radar,B_market_radar,iShares MSCI United Kingdom,country
+EWA,radar,B_market_radar,iShares MSCI Australia,country
+EWC,radar,B_market_radar,iShares MSCI Canada,country
+FXI,radar,B_market_radar,iShares China Large-Cap,country
+GREK,radar,B_market_radar,Global X MSCI Greece,country
+UUP,macro,usd_proxy,,usd_proxy
+TLT,macro,macro,,macro
+HYG,macro,macro,,macro
+GLD,macro,macro,,macro
+SLV,macro,macro,,macro
+USO,macro,macro,,macro
