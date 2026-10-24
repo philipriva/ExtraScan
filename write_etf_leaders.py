@@ -27,7 +27,7 @@ except ImportError:
     print("缺少套件: pip install yfinance pandas", file=sys.stderr)
     sys.exit(1)
 
-from sheets_writer import write_column, _client
+from sheets_writer import QQSCAN_HEADERS, write_column, _client
 
 DEFAULT_SHEET_ID = "1FSOmey7ALHFuYXxZSgjZnjWA5zpmbiv48PWAJD_yYRk"
 TAB_QQ = "QQscan"
@@ -199,7 +199,7 @@ def write_all_union_h(sa: str, sheet_id: str, dry_run: bool) -> list[str]:
     if dry_run:
         print(f"dry-run H preview first 20: {union[:20]}", flush=True)
         return union
-    n_h = write_column(sa, sheet_id, TAB_QQ, "H", union)
+    n_h = write_column(sa, sheet_id, TAB_QQ, "H", union, header=QQSCAN_HEADERS["H"])
     print(f"QQscan H written n={n_h}", flush=True)
     return union
 
@@ -283,7 +283,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not etf_list:
         print("No ETF symbols; clearing QQscan!G", flush=True)
         if not args.dry_run:
-            n = write_column(sa, args.sheet_id, TAB_QQ, "G", [])
+            n = write_column(sa, args.sheet_id, TAB_QQ, "G", [], header=QQSCAN_HEADERS["G"])
             print(f"QQscan G cleared n={n}", flush=True)
         return 0
 
@@ -326,7 +326,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 and (i % every == 0 or i == len(etf_list))
             ):
                 partial = sorted(all_leaders)
-                n_g = write_column(sa, args.sheet_id, TAB_QQ, "G", partial)
+                n_g = write_column(sa, args.sheet_id, TAB_QQ, "G", partial, header=QQSCAN_HEADERS["G"])
                 print(
                     f"checkpoint QQscan G={n_g} after {i}/{len(etf_list)} ETFs",
                     flush=True,
@@ -353,7 +353,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("dry-run OK (no Sheet write for G)", flush=True)
         return 0
 
-    n_g = write_column(sa, args.sheet_id, TAB_QQ, "G", leaders_sorted)
+    n_g = write_column(sa, args.sheet_id, TAB_QQ, "G", leaders_sorted, header=QQSCAN_HEADERS["G"])
     print(f"QQscan done G={n_g}", flush=True)
     return 0
 

@@ -13,7 +13,7 @@ from typing import Optional
 
 import requests
 
-from sheets_writer import write_column
+from sheets_writer import QQSCAN_HEADERS, write_column
 
 DEFAULT_SHEET_ID = "1FSOmey7ALHFuYXxZSgjZnjWA5zpmbiv48PWAJD_yYRk"
 TAB = "QQscan"
@@ -222,7 +222,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
 
     if not args.dry_run:
-        n_a = write_column(sa, args.sheet_id, TAB, "A", strong)
+        n_a = write_column(sa, args.sheet_id, TAB, "A", strong, header=QQSCAN_HEADERS["A"])
         print(f"QQscan A written n={n_a} file={strong_name}", flush=True)
     else:
         n_a = len(strong)
@@ -264,7 +264,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("dry-run OK", flush=True)
         return 0
 
-    n_j = write_column(sa, args.sheet_id, TAB, "J", maggie)
+    n_j = write_column(sa, args.sheet_id, TAB, "J", maggie, header=QQSCAN_HEADERS["J"])
     print(f"QQscan done A={n_a} J={n_j}", flush=True)
     return 0
 

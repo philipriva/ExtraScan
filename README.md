@@ -75,6 +75,7 @@ python run_extrascan.py
 | `sheets_writer.py` | gspread 覆寫 tab |
 | `write_qqscan.py` | Strong_Stocks + Maggiestocks → QQscan A/J |
 | `write_etf_leaders.py` | yellowETF/whiteETF → holdings leaders → QQscan G; yellowALL∪whiteballALL → QQscan H |
+| `write_zhuli_lm.py` | 主力能量 weekly→QQscan L, daily→QQscan M (US ex-ETF universe) |
 | `sheet_ids.json` | spreadsheet / folder id |
 | `etf_list.txt` | 預設 curated ETF 名單（`--all-etf-fund` 可改全宇宙） |
 
@@ -100,6 +101,7 @@ Separate workflow [`.github/workflows/etf_leaders.yml`](.github/workflows/etf_le
 - **Column G:** union of `yellowETF` + `whiteETF` → Schwab holdings (Playwright) → yfinance filter (`price > EMA200` **and** `EMA50 > EMA200` **and** `price >= 0.90 * ATH`, Philip's script). Sorted unique → `QQscan!G` (clear+overwrite). Does **not** mix ALL tabs into G.
 - **Column H:** union of `yellowALL` + `whiteballALL` (stock Fund Flow hits) → `QQscan!H` (clear+overwrite). Sheets-only; no Schwab. Does **not** mix ETF tabs into H.
 - **Column F:** no longer written (prior F values left uncleared).
+- **Row 1:** bilingual/Chinese source labels; symbols from row 2.
 - **Secret:** reuses `GOOGLE_SERVICE_ACCOUNT_JSON`. Four ExtraScan tabs stay separate universes.
 
 ```bash
@@ -110,3 +112,22 @@ GOOGLE_SERVICE_ACCOUNT_JSON='...' python write_etf_leaders.py
 GOOGLE_SERVICE_ACCOUNT_JSON='...' python write_etf_leaders.py --skip-g
 GOOGLE_SERVICE_ACCOUNT_JSON='...' python write_etf_leaders.py --skip-h --etfs XBI,XPH --dry-run
 ```
+
+## QQscan columns L + M — 主力能量做多上穿做空
+
+Workflow [`.github/workflows/zhuli_lm.yml`](.github/workflows/zhuli_lm.yml) (`Zhuli L+M to QQscan`):
+
+- **Schedule:** `45 21 * * 1-5` UTC ≈ **17:45 EDT** Mon–Fri (US close+~1h45); backup `30 0 * * 2-6` UTC.
+- **Universe:** Nasdaq Trader US equities **ex ETF/fund** (same as `yellowALL` / `universe_us_ex_etf_fund`). Not `etf_list.txt`.
+- **Column L:** weekly Tongdaxin 主力能量 — 做多線上穿做空線 (Banker 主力能量 tab / `zhuli_cross_up` on W-FRI bars).
+- **Column M:** same crossover on **daily** bars.
+- **Shared filters (daily):** market cap > 100M, volume > 300k, close > $5, close > EMA200.
+- **Row 1:** source labels for A/G/H/J/L/M; symbols from row 2.
+- One download pass for both columns. Secret: existing `GOOGLE_SERVICE_ACCOUNT_JSON` (no new secrets).
+- Does **not** mix ETF tabs; does **not** overwrite A/G/H/J data (only refreshes row-1 labels).
+
+```bash
+python write_zhuli_lm.py --dry-run --symbols AAPL,MSFT
+GOOGLE_SERVICE_ACCOUNT_JSON='...' python write_zhuli_lm.py
+```
+

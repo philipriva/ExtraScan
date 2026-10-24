@@ -1,0 +1,49 @@
+name: Zhuli L+M to QQscan
+
+# L: weekly 主力做多上穿做空 → QQscan!L
+# M: daily  主力做多上穿做空 → QQscan!M
+# Shared filters: mcap>100M, vol>300k, close>$5, daily close>EMA200
+# Universe: US ex-ETF/fund (same as yellowALL). One download pass.
+# Reuses GOOGLE_SERVICE_ACCOUNT_JSON. Does not touch A/G/H/J or Fund Flow tabs.
+#
+# Schedule: after US cash settle (EDT close+~1h45). Backup overnight.
+# Avoid colliding Fund Flow 15 20 and QQscan A/J 30 2 / 15 4.
+on:
+  schedule:
+    # Primary: Mon–Fri 21:45 UTC ≈ 17:45 EDT (US close 16:00 + ~1h45)
+    - cron: "45 21 * * 1-5"
+    # Backup: Tue–Sat 00:30 UTC ≈ 08:30 HKT (catches primary skip)
+    - cron: "30 0 * * 2-6"
+  workflow_dispatch:
+
+concurrency:
+  group: zhuli-lm-qqscan
+  cancel-in-progress: false
+
+jobs:
+  zhuli-lm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Screen → QQscan L + M
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          echo "event=${{ github.event_name }}"
+          python write_zhuli_lm.py
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zhuli_lm_log
+          path: |
+            *.log
+          if-no-files-found: ignore
+          retention-days: 7
