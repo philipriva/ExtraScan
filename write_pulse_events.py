@@ -3,8 +3,11 @@
 """Daily Market Pulse event table → Google Sheet ``MS145 Pulse events``.
 
 Schema (locked): asof | ticker | signal | signal_date | tf
-Signals (trigger-day only): white_ball | yellow_candle | zhuli_cross_up_D |
-  zhuli_cross_up_W | mcdx_golden_D
+Signals (trigger-day only):
+  weak→strong: white_ball | yellow_candle (secondary) | zhuli_cross_up_D |
+    zhuli_cross_up_W | mcdx_golden_D
+  strong→weak: zhuli_cross_down_D | zhuli_cross_down_W | mcdx_death_D
+  Banker Entry ≤3: unused (not emitted).
 
 Universe = pulse_universe.csv (MS145 proxy + radar patches + macro sleeve).
 Reuses ExtraScan Fund Flow (yellow/white) + zhuli_cross_up; MCDX from Pine Craft.
@@ -44,6 +47,7 @@ from write_zhuli_lm import (
     MIN_WEEKLY_BARS,
     drop_forming_weekly,
     to_weekly,
+    zhuli_cross_down,
     zhuli_cross_up,
 )
 
@@ -211,6 +215,26 @@ def mcdx_golden_cross(df: pd.DataFrame) -> bool:
     return a0 > b0 and a1 <= b1
 
 
+def mcdx_death_cross(df: pd.DataFrame) -> bool:
+    """sPC cross below sLC on last bar (Pine Craft MCDX death)."""
+    if df is None or len(df) < MIN_DAILY_FOR_MCDX:
+        return False
+    c = df["Close"].astype(float)
+    h = df["High"].astype(float)
+    l = df["Low"].astype(float)
+    pc = fmcdx(c * 0.96, h, l, MCDX_LEN)
+    lc = 100.0 - fmcdx(c * 1.04, h, l, MCDX_LEN)
+    s_pc = pc.rolling(MCDX_SMA, min_periods=MCDX_SMA).mean()
+    s_lc = lc.rolling(MCDX_SMA, min_periods=MCDX_SMA).mean()
+    if len(s_pc) < 2:
+        return False
+    a0, a1 = float(s_pc.iloc[-1]), float(s_pc.iloc[-2])
+    b0, b1 = float(s_lc.iloc[-1]), float(s_lc.iloc[-2])
+    if any(pd.isna(x) for x in (a0, a1, b0, b1)):
+        return False
+    return a0 < b0 and a1 >= b1
+
+
 def screen_symbol(sym: str, d: pd.DataFrame, asof: str) -> list[list[str]]:
     """Emit trigger-day rows for one ticker (daily + weekly zhuli)."""
     rows: list[list[str]] = []
@@ -229,20 +253,27 @@ def screen_symbol(sym: str, d: pd.DataFrame, asof: str) -> list[list[str]]:
     try:
         if zhuli_cross_up(d):
             rows.append([asof, sym, "zhuli_cross_up_D", signal_date, "D"])
+        if zhuli_cross_down(d):
+            rows.append([asof, sym, "zhuli_cross_down_D", signal_date, "D"])
     except Exception as exc:
         print(f"[skip zhuli D] {sym}: {exc}", file=sys.stderr, flush=True)
 
     try:
         if mcdx_golden_cross(d):
             rows.append([asof, sym, "mcdx_golden_D", signal_date, "D"])
+        if mcdx_death_cross(d):
+            rows.append([asof, sym, "mcdx_death_D", signal_date, "D"])
     except Exception as exc:
         print(f"[skip mcdx] {sym}: {exc}", file=sys.stderr, flush=True)
 
     try:
         w = drop_forming_weekly(to_weekly(d))
-        if w is not None and len(w) >= MIN_WEEKLY_BARS and zhuli_cross_up(w):
+        if w is not None and len(w) >= MIN_WEEKLY_BARS:
             w_date = bar_date_str(w.index[-1])
-            rows.append([asof, sym, "zhuli_cross_up_W", w_date, "W"])
+            if zhuli_cross_up(w):
+                rows.append([asof, sym, "zhuli_cross_up_W", w_date, "W"])
+            if zhuli_cross_down(w):
+                rows.append([asof, sym, "zhuli_cross_down_W", w_date, "W"])
     except Exception as exc:
         print(f"[skip zhuli W] {sym}: {exc}", file=sys.stderr, flush=True)
 

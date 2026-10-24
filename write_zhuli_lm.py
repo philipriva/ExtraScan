@@ -110,6 +110,18 @@ def zhuli_cross_up(df: pd.DataFrame) -> bool:
     return b0 > e0 and b1 <= e1
 
 
+def zhuli_cross_down(df: pd.DataFrame) -> bool:
+    """主力做多 下穿 主力做空：bull crosses below bear on last bar."""
+    bull, bear = zhuli_bull_bear_series(df)
+    if bull is None or bear is None or len(bull) < 2:
+        return False
+    b0, b1 = float(bull.iloc[-1]), float(bull.iloc[-2])
+    e0, e1 = float(bear.iloc[-1]), float(bear.iloc[-2])
+    if any(pd.isna(x) for x in (b0, b1, e0, e1)):
+        return False
+    return b0 < e0 and b1 >= e1
+
+
 def normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame | None:
     cols = {str(c).lower(): c for c in df.columns}
     need = ("open", "high", "low", "close", "volume")

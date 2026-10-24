@@ -140,8 +140,22 @@ Daily post-close screener over **MS145 proxy + radar patches + macro sleeve** �
 | `events` | Header + trigger-day rows: `asof | ticker | signal | signal_date | tf` |
 | `universe` | `pulse_universe.csv` (ticker, layer, …) |
 
-Signals: `white_ball` | `yellow_candle` | `zhuli_cross_up_D` | `zhuli_cross_up_W` | `mcdx_golden_D`  
-(only the day the signal fires — not ongoing bullish state).
+Signals (trigger-day only — not ongoing state):
+
+| signal | 定稿層 | 方向 |
+|--------|--------|------|
+| `zhuli_cross_up_D` | ①初動 | 弱→強 |
+| `white_ball` | ①初動（偶發／可假） | 弱→強 |
+| `yellow_candle` | ①次要提示（樣本唔加分） | 弱→強 |
+| `zhuli_cross_up_W` | ②加固 | 弱→強 |
+| `mcdx_golden_D` | ④信心 | 弱→強 |
+| `zhuli_cross_down_D` | ①早警 | 強→弱 |
+| `zhuli_cross_down_W` | 加固／確認輔助 | 強→弱 |
+| `mcdx_death_D` | ③晚確認 | 強→弱 |
+
+③確認硬閘＝Market Pulse RS＋50DMA≥15（唔由本表計算）。FF **綠佔優**＝②加固（Sheet Ops 解讀，唔係 events 欄）。**Banker Entry ≤3 唔用／唔 emit。**
+
+叠序：弱→強 初動→加固→Pulse閘→信心；強→弱 早警→確認→晚確認。上行早期唔叫「早警」。
 
 - Script: `write_pulse_events.py`
 - Universe: `pulse_universe.csv` (layer = ms145 / radar / macro; USD = **UUP**)
@@ -149,5 +163,5 @@ Signals: `white_ball` | `yellow_candle` | `zhuli_cross_up_D` | `zhuli_cross_up_W
 - Reuses secret `GOOGLE_SERVICE_ACCOUNT_JSON`
 - Manual: Actions → *Pulse events to Sheet* → Run workflow (optional refresh universe tab)
 
-Formulas: Fund Flow yellow/white = ExtraScan; zhuli = `write_zhuli_lm` (no stock filters on this ETF universe); MCDX golden = Pine Craft (`sPC` cross above `sLC`).
+Formulas: Fund Flow yellow/white = ExtraScan; zhuli = `write_zhuli_lm` (no stock filters on this ETF universe); MCDX = Pine Craft (`SMA10(PC)` cross `SMA10(LC)`; PC=`fmcdx(C×0.96)`, LC=`100−fmcdx(C×1.04)`, LEN=100).
 
