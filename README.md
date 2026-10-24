@@ -76,6 +76,9 @@ python run_extrascan.py
 | `write_qqscan.py` | Strong_Stocks + Maggiestocks → QQscan A/J |
 | `write_etf_leaders.py` | yellowETF/whiteETF → holdings leaders → QQscan G; yellowALL∪whiteballALL → QQscan H |
 | `write_zhuli_lm.py` | 主力能量 weekly→QQscan L, daily→QQscan M (US ex-ETF universe) |
+| `write_pulse_events.py` | MS145 Pulse `events` + `ff_state` → Sheet |
+| `docs/timing-filter-LOCKED.md` | Locked timing-filter stack (Philip 寫入) |
+| `docs/timing-filter-ff.md` | Fund Flow teach pack for Pulse |
 | `sheet_ids.json` | spreadsheet / folder id |
 | `etf_list.txt` | 預設 curated ETF 名單（`--all-etf-fund` 可改全宇宙） |
 
@@ -138,6 +141,7 @@ Daily post-close screener over **MS145 proxy + radar patches + macro sleeve** �
 | Tab | Contents |
 |-----|----------|
 | `events` | Header + trigger-day rows: `asof | ticker | signal | signal_date | tf` |
+| `ff_state` | One row per universe ticker (last settled bar): `asof | ticker | fundtrend | bull | color | ft_ge_50 | white_circle | yellow | layer` |
 | `universe` | `pulse_universe.csv` (ticker, layer, …) |
 
 Signals (trigger-day only — not ongoing state):
@@ -146,22 +150,25 @@ Signals (trigger-day only — not ongoing state):
 |--------|--------|------|
 | `zhuli_cross_up_D` | ①初動 | 弱→強 |
 | `white_ball` | ①初動（偶發／可假） | 弱→強 |
-| `yellow_candle` | ①次要提示（樣本唔加分） | 弱→強 |
+| `yellow_candle` | ①次要提示（樣本唔加分；唔當硬閘） | 弱→強 |
 | `zhuli_cross_up_W` | ②加固 | 弱→強 |
-| `mcdx_golden_D` | ④信心 | 弱→強 |
+| `mcdx_golden_D` | ④信心加分 | 弱→強 |
 | `zhuli_cross_down_D` | ①早警 | 強→弱 |
-| `zhuli_cross_down_W` | 加固／確認輔助 | 強→弱 |
+| `zhuli_cross_down_W` | 輔助 | 強→弱 |
 | `mcdx_death_D` | ③晚確認 | 強→弱 |
 
-③確認硬閘＝Market Pulse RS＋50DMA≥15（唔由本表計算）。FF **綠佔優**＝②加固（Sheet Ops 解讀，唔係 events 欄）。**Banker Entry ≤3 唔用／唔 emit。**
+③確認硬閘＝Market Pulse RS＋50DMA≥15（唔由本表計算）。FF **綠佔優**＝②加固（Pulse 用 `ff_state.color` 自算窗％；Sheet **唔**預聚合）。**Banker Entry ≤3 唔用／唔 emit。**
 
-叠序：弱→強 初動→加固→Pulse閘→信心；強→弱 早警→確認→晚確認。上行早期唔叫「早警」。
+叠序：弱→強 **初動→加固→Pulse閘→信心加分**；強→弱 **早警→確認→晚確認**。上行早期唔叫「早警」。
+
+Docs: [`docs/timing-filter-LOCKED.md`](docs/timing-filter-LOCKED.md) · [`docs/timing-filter-ff.md`](docs/timing-filter-ff.md)  
+**公式／概念若再改 → 必須通知 Market Pulse。** Pipeline authorized Philip「寫入」2026-10-24.
 
 - Script: `write_pulse_events.py`
 - Universe: `pulse_universe.csv` (layer = ms145 / radar / macro; USD = **UUP**)
 - Workflow: `.github/workflows/pulse_events.yml` — cron `50 21 * * 1-5` UTC (+ backup `40 0 * * 2-6`)
 - Reuses secret `GOOGLE_SERVICE_ACCOUNT_JSON`
 - Manual: Actions → *Pulse events to Sheet* → Run workflow (optional refresh universe tab)
+- Local CSVs: `out/pulse_events.csv` + `out/pulse_ff_state.csv`
 
-Formulas: Fund Flow yellow/white = ExtraScan; zhuli = `write_zhuli_lm` (no stock filters on this ETF universe); MCDX = Pine Craft (`SMA10(PC)` cross `SMA10(LC)`; PC=`fmcdx(C×0.96)`, LC=`100−fmcdx(C×1.04)`, LEN=100).
-
+Formulas: Fund Flow = ExtraScan `fund_flow_state` (color green/blue/red/white_status); zhuli = `write_zhuli_lm` (no stock filters on this ETF universe); MCDX = Pine Craft (`SMA10(PC)` cross `SMA10(LC)`; PC=`fmcdx(C×0.96)`, LC=`100−fmcdx(C×1.04)`, LEN=100).

@@ -82,20 +82,20 @@ def safe_ratio(numer: pd.Series, a: pd.Series, b: pd.Series) -> pd.Series:
     return ((numer - a) / rng * 100.0).where(rng != 0.0)
 
 
-def fund_flow_flags(df: pd.DataFrame) -> tuple[bool, bool]:
-    """Return (yellow, white_circle) on latest completed bar.
+def fund_flow_state(df: pd.DataFrame) -> dict | None:
+    """Latest completed-bar Fund Flow state (same formulas as ExtraScan / Banker).
 
-    Matches banker_screener_app_new.fund_flow_hit modes yellow / white_circle:
-      yellow       = is_banker (fundtrend cross above bull & bull < 25)
-      white_circle = prev status BLUE & today GREEN & not banker
+    Returns dict with:
+      fundtrend, bull, color (green|blue|red|white_status),
+      ft_ge_50, white_circle, yellow
+    or None if insufficient bars / NaN.
 
-    Mutual exclusion (same as Banker): white requires ~is_banker, so a symbol
-    cannot be both yellow and white on the same bar. Banker GUI is a radio
-    (one mode per run); ExtraScan evaluates both and splits into two tabs.
-    Example 2026-10-20 1D: XBI/XES/XPH → yellow only (not whiteETF).
+    Color priority (same-day): green > white_status > blue > red.
+    white_circle = prev BLUE + today GREEN + not yellow (mutual exclusion).
+    yellow = crossover(fundtrend, bull) & bull < 25 (附註 only; not a hard gate).
     """
     if df is None or len(df) < MIN_BARS:
-        return False, False
+        return None
     o = df["Open"].astype(float)
     h = df["High"].astype(float)
     l = df["Low"].astype(float)
@@ -128,9 +128,32 @@ def fund_flow_flags(df: pd.DataFrame) -> tuple[bool, bool]:
 
     white = ((status == BLUE).shift(1) == True) & (status == GREEN) & (~is_banker)
 
-    yellow = bool(is_banker.iloc[-1]) if len(is_banker) else False
-    white_circle = bool(white.iloc[-1]) if len(white) >= 2 else False
-    return yellow, white_circle
+    ft = float(fundtrend.iloc[-1])
+    bb = float(bull.iloc[-1])
+    if ft != ft or bb != bb:  # NaN
+        return None
+    st = int(status.iloc[-1])
+    color_map = {GREEN: "green", BLUE: "blue", RED: "red", WHITE: "white_status"}
+    return {
+        "fundtrend": ft,
+        "bull": bb,
+        "color": color_map.get(st, "na"),
+        "ft_ge_50": ft >= 50.0,
+        "white_circle": bool(white.iloc[-1]) if len(white) >= 2 else False,
+        "yellow": bool(is_banker.iloc[-1]) if len(is_banker) else False,
+    }
+
+
+def fund_flow_flags(df: pd.DataFrame) -> tuple[bool, bool]:
+    """Return (yellow, white_circle) on latest completed bar.
+
+    Matches banker_screener_app_new.fund_flow_hit modes yellow / white_circle.
+    Thin wrapper over fund_flow_state (same formulas).
+    """
+    st = fund_flow_state(df)
+    if st is None:
+        return False, False
+    return bool(st["yellow"]), bool(st["white_circle"])
 
 
 def _dir(url: str) -> pd.DataFrame:

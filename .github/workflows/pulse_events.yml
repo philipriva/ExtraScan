@@ -1,8 +1,13 @@
 name: Pulse events to Sheet
 
-# Daily Market Pulse theme-timing event table.
-# Schema: asof|ticker|signal|signal_date|tf (trigger-day only).
+# Daily Market Pulse theme-timing tables.
+# Tabs: events (trigger-day signals) + ff_state (one row/ticker FF snapshot).
+# events schema: asof|ticker|signal|signal_date|tf
+#   up: white_ball|yellow_candle|zhuli_cross_up_D|zhuli_cross_up_W|mcdx_golden_D
+#   down: zhuli_cross_down_D|zhuli_cross_down_W|mcdx_death_D
+# ff_state: asof|ticker|fundtrend|bull|color|ft_ge_50|white_circle|yellow|layer
 # Universe: pulse_universe.csv (MS145 + radar + macro). Reuses GOOGLE_SERVICE_ACCOUNT_JSON.
+# Locked filter: docs/timing-filter-LOCKED.md (Philip 寫入 2026-10-24).
 #
 # Schedule: after US cash settle (same window as zhuli L/M).
 on:
@@ -33,7 +38,7 @@ jobs:
           python-version: "3.12"
       - name: Install deps
         run: pip install -r requirements.txt
-      - name: Screen → events tab
+      - name: Screen → events + ff_state tabs
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           PULSE_SHEET_ID: "11ew_PpHdAnFDn6TWTsGp8qX7GXoYxQOtpvIt_DHmqZ8"
@@ -52,5 +57,6 @@ jobs:
           name: pulse_events_out
           path: |
             out/pulse_events.csv
+            out/pulse_ff_state.csv
           if-no-files-found: ignore
           retention-days: 14

@@ -2,17 +2,22 @@
 # -*- coding: utf-8 -*-
 """Daily Market Pulse event table → Google Sheet ``MS145 Pulse events``.
 
-Schema (locked): asof | ticker | signal | signal_date | tf
-Signals (trigger-day only):
-  weak→strong: white_ball | yellow_candle (secondary) | zhuli_cross_up_D |
-    zhuli_cross_up_W | mcdx_golden_D
-  strong→weak: zhuli_cross_down_D | zhuli_cross_down_W | mcdx_death_D
-  Banker Entry ≤3: unused (not emitted).
+Tabs:
+  events   — trigger-day signals: asof|ticker|signal|signal_date|tf
+             weak→strong: white_ball | yellow_candle (secondary) | zhuli_cross_up_D |
+               zhuli_cross_up_W | mcdx_golden_D
+             strong→weak: zhuli_cross_down_D | zhuli_cross_down_W | mcdx_death_D
+             Banker Entry ≤3 unused (not emitted). yellow = 附註 only, not a hard gate.
+  ff_state — one row per universe ticker (last settled daily bar):
+             asof|ticker|fundtrend|bull|color|ft_ge_50|white_circle|yellow|layer
+             Pulse interprets green dominance / windows; Sheet does not aggregate.
+  universe — optional refresh from pulse_universe.csv
 
 Universe = pulse_universe.csv (MS145 proxy + radar patches + macro sleeve).
-Reuses ExtraScan Fund Flow (yellow/white) + zhuli_cross_up; MCDX from Pine Craft.
+Reuses ExtraScan Fund Flow (fund_flow_state / flags) + zhuli cross up/down; MCDX golden/death from Pine Craft.
 ETFs/macros: no stock mcap/vol/$5/EMA200 filters — OHLC crosses only.
-Yahoo auto_adjust=True. Overwrites ``events`` tab RAW (header + rows).
+Yahoo auto_adjust=True. Overwrites ``events`` + ``ff_state`` tabs RAW.
+Pipeline authorized 2026-10-24 Philip「寫入」; see docs/timing-filter-LOCKED.md.
 """
 from __future__ import annotations
 
@@ -39,6 +44,7 @@ from run_extrascan import (
     asof_et_str,
     drop_forming,
     fund_flow_flags,
+    fund_flow_state,
     hkt_now_str,
     ny_now,
 )
@@ -53,9 +59,21 @@ from write_zhuli_lm import (
 
 DEFAULT_SHEET_ID = "11ew_PpHdAnFDn6TWTsGp8qX7GXoYxQOtpvIt_DHmqZ8"
 TAB_EVENTS = "events"
+TAB_FF_STATE = "ff_state"
 TAB_UNIVERSE = "universe"
 UNIVERSE_CSV = Path(__file__).resolve().parent / "pulse_universe.csv"
 HEADER = ["asof", "ticker", "signal", "signal_date", "tf"]
+FF_STATE_HEADER = [
+    "asof",
+    "ticker",
+    "fundtrend",
+    "bull",
+    "color",
+    "ft_ge_50",
+    "white_circle",
+    "yellow",
+    "layer",
+]
 
 # MCDX needs HHV/LLV 100 + SMA 10; weekly zhuli needs ~40 bars.
 MIN_DAILY_FOR_MCDX = 120
@@ -236,7 +254,7 @@ def mcdx_death_cross(df: pd.DataFrame) -> bool:
 
 
 def screen_symbol(sym: str, d: pd.DataFrame, asof: str) -> list[list[str]]:
-    """Emit trigger-day rows for one ticker (daily + weekly zhuli)."""
+    """Emit trigger-day rows for one ticker (daily + weekly zhuli up/down + MCDX)."""
     rows: list[list[str]] = []
     signal_date = bar_date_str(d.index[-1])
 
@@ -280,17 +298,43 @@ def screen_symbol(sym: str, d: pd.DataFrame, asof: str) -> list[list[str]]:
     return rows
 
 
-def write_events_sheet(
-    sa_json: str, spreadsheet_id: str, rows: list[list[str]]
+def ff_state_row(sym: str, d: pd.DataFrame, asof: str, layer: str) -> list[str] | None:
+    """One ff_state row for last settled bar, or None if FF state unavailable."""
+    try:
+        st = fund_flow_state(d)
+    except Exception as exc:
+        print(f"[skip ff_state] {sym}: {exc}", file=sys.stderr, flush=True)
+        return None
+    if st is None:
+        return None
+    return [
+        asof,
+        sym,
+        f"{st['fundtrend']:.4f}",
+        f"{st['bull']:.4f}",
+        str(st["color"]),
+        "TRUE" if st["ft_ge_50"] else "FALSE",
+        "TRUE" if st["white_circle"] else "FALSE",
+        "TRUE" if st["yellow"] else "FALSE",
+        layer,
+    ]
+
+
+def write_tab(
+    sa_json: str,
+    spreadsheet_id: str,
+    tab: str,
+    header: list[str],
+    rows: list[list[str]],
 ) -> None:
     gc = _client(sa_json)
     sh = gc.open_by_key(spreadsheet_id)
-    ws = _ensure_worksheet(sh, TAB_EVENTS)
-    body = [HEADER] + rows
+    ws = _ensure_worksheet(sh, tab)
+    body = [header] + rows
     need = max(len(body) + 10, 100)
     if ws.row_count < need:
         ws.resize(rows=need)
-    print(f"Sheets: overwrite {TAB_EVENTS} data_rows={len(rows)}", flush=True)
+    print(f"Sheets: overwrite {tab} data_rows={len(rows)}", flush=True)
     _clear_and_write(ws, body)
 
 
@@ -320,10 +364,16 @@ def maybe_refresh_universe_tab(
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Pulse events → Sheet")
+    ap = argparse.ArgumentParser(description="Pulse events + ff_state → Sheet")
     ap.add_argument("--universe", type=Path, default=UNIVERSE_CSV)
     ap.add_argument("--sheet-id", default=os.environ.get("PULSE_SHEET_ID", DEFAULT_SHEET_ID))
     ap.add_argument("--out-csv", type=Path, default=Path("out/pulse_events.csv"))
+    ap.add_argument(
+        "--out-ff-csv",
+        type=Path,
+        default=Path("out/pulse_ff_state.csv"),
+        help="Local CSV for ff_state tab",
+    )
     ap.add_argument(
         "--refresh-universe",
         action="store_true",
@@ -341,6 +391,7 @@ def main() -> int:
         return 2
 
     univ = load_universe(args.universe)
+    layer_of = {t: layer for t, layer in univ}
     syms = [t for t, _ in univ]
     asof = asof_date_str()
     print(
@@ -351,11 +402,13 @@ def main() -> int:
 
     data = download(syms)
     events: list[list[str]] = []
+    ff_rows: list[list[str]] = []
     stats = {
         "universe": len(syms),
         "downloaded": len(data),
         "norm_fail": 0,
         "screened": 0,
+        "ff_state": 0,
         "by_signal": {},
     }
     for sym in syms:
@@ -377,7 +430,14 @@ def main() -> int:
             stats["by_signal"][sig] = stats["by_signal"].get(sig, 0) + 1
         events.extend(rows)
 
+        ff = ff_state_row(sym, d, asof, layer_of.get(sym, "unknown"))
+        if ff is not None:
+            ff_rows.append(ff)
+            stats["ff_state"] += 1
+
     events.sort(key=lambda r: (r[2], r[1]))
+    ff_rows.sort(key=lambda r: r[1])
+
     args.out_csv.parent.mkdir(parents=True, exist_ok=True)
     with args.out_csv.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
@@ -390,6 +450,13 @@ def main() -> int:
         flush=True,
     )
 
+    args.out_ff_csv.parent.mkdir(parents=True, exist_ok=True)
+    with args.out_ff_csv.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(FF_STATE_HEADER)
+        w.writerows(ff_rows)
+    print(f"wrote {args.out_ff_csv} rows={len(ff_rows)}", flush=True)
+
     sa = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
     if args.dry_run:
         print("Sheets: dry-run skip", flush=True)
@@ -398,7 +465,8 @@ def main() -> int:
         print("Sheets: skip (no GOOGLE_SERVICE_ACCOUNT_JSON)", flush=True)
         return 0
 
-    write_events_sheet(sa, args.sheet_id, events)
+    write_tab(sa, args.sheet_id, TAB_EVENTS, HEADER, events)
+    write_tab(sa, args.sheet_id, TAB_FF_STATE, FF_STATE_HEADER, ff_rows)
     if args.refresh_universe:
         maybe_refresh_universe_tab(sa, args.sheet_id, univ, args.universe)
     print("done", flush=True)
