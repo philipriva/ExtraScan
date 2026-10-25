@@ -153,11 +153,13 @@ Signals (trigger-day only — not ongoing state):
 | `yellow_candle` | ①次要提示（樣本唔加分；唔當硬閘） | 弱→強 |
 | `zhuli_cross_up_W` | ②加固 | 弱→強 |
 | `mcdx_golden_D` | ④信心加分 | 弱→強 |
+| `pulse_bottom_5` | ⑤見底讀（RS止LL＋市寬） | 見底預示 only |
+| `whale_hit` | ⑥Whale（昨紅今黃較短） | 見底預示 only |
 | `zhuli_cross_down_D` | ①早警 | 強→弱 |
 | `zhuli_cross_down_W` | 輔助 | 強→弱 |
 | `mcdx_death_D` | ③晚確認 | 強→弱 |
 
-③確認硬閘＝Market Pulse RS＋50DMA≥15（唔由本表計算）。FF **綠佔優**＝②加固（Pulse 用 `ff_state.color` 自算窗％；Sheet **唔**預聚合）。**Banker Entry ≤3 唔用／唔 emit。**
+③確認硬閘＝Market Pulse RS＋50DMA≥15（唔由本表計算）。FF **綠佔優**＝②加固（Pulse 用 `ff_state.color` 自算窗％；Sheet **唔**預聚合）。**Banker Entry ≤3 唔用／唔 emit。** ⑤⑥ **只有見底預示、無見頂 emit**（Philip「寫入」2026-10-26）。
 
 叠序：弱→強 **初動→加固→Pulse閘→信心加分**；強→弱 **早警→確認→晚確認**。上行早期唔叫「早警」。
 
@@ -171,4 +173,4 @@ Docs: [`docs/timing-filter-LOCKED.md`](docs/timing-filter-LOCKED.md) · [`docs/t
 - Manual: Actions → *Pulse events to Sheet* → Run workflow (optional refresh universe tab)
 - Local CSVs: `out/pulse_events.csv` + `out/pulse_ff_state.csv`
 
-Formulas: Fund Flow = ExtraScan `fund_flow_state` (color green/blue/red/white_status); zhuli = `write_zhuli_lm` (no stock filters on this ETF universe); MCDX = Pine Craft (`SMA10(PC)` cross `SMA10(LC)`; PC=`fmcdx(C×0.96)`, LC=`100−fmcdx(C×1.04)`, LEN=100).
+Formulas: Fund Flow = ExtraScan `fund_flow_state` (color green/blue/red/white_status); zhuli = `write_zhuli_lm` (no stock filters on this ETF universe); MCDX = Pine Craft (`SMA10(PC)` cross `SMA10(LC)`; PC=`fmcdx(C×0.96)`, LC=`100−fmcdx(C×1.04)`, LEN=100). ⑥ `whale_hit` = `pulse_layers_56`（同 banker `whale_hit`）. ⑤ `pulse_bottom_5` = RS stop_ll onset + RSP/SPY slope20>0 within +10TD（live emit on breadth-confirm day; `signal_date`=onset）.

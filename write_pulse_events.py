@@ -6,8 +6,10 @@ Tabs:
   events   — trigger-day signals: asof|ticker|signal|signal_date|tf
              weak→strong: white_ball | yellow_candle (secondary) | zhuli_cross_up_D |
                zhuli_cross_up_W | mcdx_golden_D
+             foreshadow bottoms-only: whale_hit (⑥) | pulse_bottom_5 (⑤)
              strong→weak: zhuli_cross_down_D | zhuli_cross_down_W | mcdx_death_D
              Banker Entry ≤3 unused (not emitted). yellow = 附註 only, not a hard gate.
+             ⑤⑥ have no top emit.
   ff_state — one row per universe ticker (last settled daily bar):
              asof|ticker|fundtrend|bull|color|ft_ge_50|white_circle|yellow|layer
              Pulse interprets green dominance / windows; Sheet does not aggregate.
@@ -55,6 +57,11 @@ from write_zhuli_lm import (
     to_weekly,
     zhuli_cross_down,
     zhuli_cross_up,
+)
+from pulse_layers_56 import (
+    build_breadth_ok,
+    pulse_bottom_5_fire,
+    whale_hit_last,
 )
 
 DEFAULT_SHEET_ID = "11ew_PpHdAnFDn6TWTsGp8qX7GXoYxQOtpvIt_DHmqZ8"
@@ -253,8 +260,15 @@ def mcdx_death_cross(df: pd.DataFrame) -> bool:
     return a0 < b0 and a1 >= b1
 
 
-def screen_symbol(sym: str, d: pd.DataFrame, asof: str) -> list[list[str]]:
-    """Emit trigger-day rows for one ticker (daily + weekly zhuli up/down + MCDX)."""
+def screen_symbol(
+    sym: str,
+    d: pd.DataFrame,
+    asof: str,
+    *,
+    spy: pd.DataFrame | None = None,
+    breadth_ok: pd.Series | None = None,
+) -> list[list[str]]:
+    """Emit trigger-day rows for one ticker (FF/zhuli/MCDX + ⑤⑥ foreshadow)."""
     rows: list[list[str]] = []
     signal_date = bar_date_str(d.index[-1])
 
@@ -294,6 +308,25 @@ def screen_symbol(sym: str, d: pd.DataFrame, asof: str) -> list[list[str]]:
                 rows.append([asof, sym, "zhuli_cross_down_W", w_date, "W"])
     except Exception as exc:
         print(f"[skip zhuli W] {sym}: {exc}", file=sys.stderr, flush=True)
+
+    # ⑥ Whale — bottoms foreshadow only (no top variant)
+    try:
+        if whale_hit_last(d):
+            rows.append([asof, sym, "whale_hit", signal_date, "D"])
+    except Exception as exc:
+        print(f"[skip whale] {sym}: {exc}", file=sys.stderr, flush=True)
+
+    # ⑤ Pulse 見底讀 — RS stop_ll onset + RSP/SPY breadth within +10TD
+    # Skip self-RS for SPY; still allow QQQ/RSP etc.
+    if spy is not None and breadth_ok is not None and sym != "SPY":
+        try:
+            fires, onset_ts = pulse_bottom_5_fire(d, spy, breadth_ok)
+            if fires:
+                # signal_date = onset (Pulse research label); asof = run day
+                sd = bar_date_str(onset_ts) if onset_ts is not None else signal_date
+                rows.append([asof, sym, "pulse_bottom_5", sd, "D"])
+        except Exception as exc:
+            print(f"[skip pulse_bottom_5] {sym}: {exc}", file=sys.stderr, flush=True)
 
     return rows
 
@@ -411,6 +444,26 @@ def main() -> int:
         "ff_state": 0,
         "by_signal": {},
     }
+
+    # Benchmarks for ⑤ (must be in universe: SPY + RSP)
+    spy_df = None
+    rsp_df = None
+    raw_spy = data.get("SPY")
+    if raw_spy is not None:
+        spy_df = drop_forming(normalize_ohlc(raw_spy))
+    raw_rsp = data.get("RSP")
+    if raw_rsp is not None:
+        rsp_df = drop_forming(normalize_ohlc(raw_rsp))
+    breadth_ok = (
+        build_breadth_ok(spy_df, rsp_df)
+        if spy_df is not None
+        else pd.Series(dtype=bool)
+    )
+    if spy_df is None:
+        print("[warn] SPY missing — pulse_bottom_5 skipped", file=sys.stderr, flush=True)
+    elif rsp_df is None:
+        print("[warn] RSP missing — breadth_ok all False", file=sys.stderr, flush=True)
+
     for sym in syms:
         raw = data.get(sym)
         if raw is None:
@@ -424,7 +477,9 @@ def main() -> int:
             stats["norm_fail"] += 1
             continue
         stats["screened"] += 1
-        rows = screen_symbol(sym, d, asof)
+        rows = screen_symbol(
+            sym, d, asof, spy=spy_df, breadth_ok=breadth_ok
+        )
         for row in rows:
             sig = row[2]
             stats["by_signal"][sig] = stats["by_signal"].get(sig, 0) + 1

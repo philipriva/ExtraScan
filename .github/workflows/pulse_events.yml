@@ -4,6 +4,7 @@ name: Pulse events to Sheet
 # Tabs: events (trigger-day signals) + ff_state (one row/ticker FF snapshot).
 # events schema: asof|ticker|signal|signal_date|tf
 #   up: white_ball|yellow_candle|zhuli_cross_up_D|zhuli_cross_up_W|mcdx_golden_D
+#   foreshadow bottoms-only: whale_hit|pulse_bottom_5
 #   down: zhuli_cross_down_D|zhuli_cross_down_W|mcdx_death_D
 # ff_state: asof|ticker|fundtrend|bull|color|ft_ge_50|white_circle|yellow|layer
 # Universe: pulse_universe.csv (MS145 + radar + macro). Reuses GOOGLE_SERVICE_ACCOUNT_JSON.

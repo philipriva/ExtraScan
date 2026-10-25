@@ -31,7 +31,7 @@
     },
     "folder_id": "1N41jCmxOvOzNQXRtE6DwYojyU5kskqZM",
     "schedule": "cron 50 21 * * 1-5 UTC (~17:50 EDT) + backup 40 0 * * 2-6",
-    "schema": "events: asof|ticker|signal|signal_date|tf ; ff_state: asof|ticker|fundtrend|bull|color|ft_ge_50|white_circle|yellow|layer",
+    "schema": "events: asof|ticker|signal|signal_date|tf (+ whale_hit|pulse_bottom_5 bottoms foreshadow); ff_state: asof|ticker|fundtrend|bull|color|ft_ge_50|white_circle|yellow|layer",
     "signals": [
       "white_ball",
       "yellow_candle",
@@ -40,10 +40,12 @@
       "mcdx_golden_D",
       "zhuli_cross_down_D",
       "zhuli_cross_down_W",
-      "mcdx_death_D"
+      "mcdx_death_D",
+      "whale_hit",
+      "pulse_bottom_5"
     ],
     "universe_file": "pulse_universe.csv",
-    "notes": "Trigger-day overwrite events + full-universe overwrite ff_state each run. USD=UUP. Yellow secondary (not hard gate). Banker≤3 unused. Green dominance windows = Pulse from ff_state (no Sheet aggregate). Philip 寫入 2026-10-24. Formula/concept changes must notify Market Pulse. Reuses GOOGLE_SERVICE_ACCOUNT_JSON.",
+    "notes": "Trigger-day overwrite events + full-universe overwrite ff_state each run. USD=UUP. Yellow secondary (not hard gate). Banker≤3 unused. Green dominance windows = Pulse from ff_state (no Sheet aggregate). Philip 寫入 2026-10-24. Formula/concept changes must notify Market Pulse. Reuses GOOGLE_SERVICE_ACCOUNT_JSON. ⑤ pulse_bottom_5 + ⑥ whale_hit bottoms-only foreshadow (Philip 寫入 2026-10-26). No top emit. Banker≤3 still unused.",
     "ff_state_schema": "asof|ticker|fundtrend|bull|color|ft_ge_50|white_circle|yellow|layer",
     "locked_filter": "docs/timing-filter-LOCKED.md",
     "ff_docs": "docs/timing-filter-ff.md"

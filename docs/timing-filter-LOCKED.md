@@ -16,6 +16,15 @@
 2. **確認** — Pulse 閘／價格確認（本表唔替代）
 3. **晚確認** — MCDX 死叉（`mcdx_death_D`）；週主力下穿（`zhuli_cross_down_W`）可作輔助
 
+## 見底預示（⑤⑥ · bottoms-only · Philip「寫入」2026-10-26）
+
+| signal | 層 | 定義 | 邊界 |
+|--------|----|------|------|
+| `pulse_bottom_5` | ⑤ Pulse見底讀 | RS(ticker/SPY) stop_ll onset（60/10）＋＋10TD 內市寬 RSP/SPY 20d slope>0 | **無見頂**；唔係③硬閘 |
+| `whale_hit` | ⑥ Whale | 昨紅＋今黃＋今黃高度&lt;昨紅高度（Tongdaxin 能量柱） | **無見頂**；Banker L1 仍唔用 |
+
+叠序啓示：`⑤→(⑥)→①→(④)→③`。Live `pulse_bottom_5`＝**RS stop_ll False→True onset**＋＋10TD 市寬確認日 emit（`signal_date`＝onset）。研究表有時喺 T−40 窗左緣標⑤（結構早已止LL、窗內無新 onset）——daily emit **唔**重放呢種窗緣標籤，只打真 onset；屬有意近似。
+
 ## 唔用
 - **Banker Entry ≤3** — 全年樣本幾乎零；唔 emit、唔當閘
 - 黃燭／Banker≤3 唔做 hard gate
