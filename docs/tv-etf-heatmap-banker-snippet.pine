@@ -1,0 +1,26 @@
+// Philip 2026-10-28 — ETF Heatmap Bulletproof Logic (partial; white=signal_b2g)
+// Saved for ExtraScan alignment. Full script kept in chat t200u.
+
+//@version=6
+// Core from Philip's "ETF Heatmap (0-40) - Bulletproof Logic"
+f_banker_logic() =>
+    float _close = close, float _high = high, float _low = low, float _open = open
+    float low27 = ta.lowest(_low, 27), float high27 = ta.highest(_high, 27)
+    float rsv = (high27 - low27) == 0 ? 0 : (_close - low27) / (high27 - low27) * 100
+    float sma_rsv_5 = ta.sma(rsv, 5)
+    var float xsa1 = na
+    xsa1 := na(xsa1[1]) ? sma_rsv_5 : (rsv * 1 + xsa1[1] * 4) / 5
+    float sma_xsa1_3 = ta.sma(xsa1, 3)
+    var float xsa2 = na
+    xsa2 := na(xsa2[1]) ? sma_xsa1_3 : (xsa1 * 1 + xsa2[1] * 2) / 3
+    float fundtrend = (3 * xsa1 - 2 * xsa2 - 50) * 1.032 + 50
+    float typ = (2 * _close + _high + _low + _open) / 5
+    float lol = ta.lowest(_low, 34), float hoh = ta.highest(_high, 34)
+    float bullbearline = ta.ema((hoh - lol) == 0 ? 0 : (typ - lol) / (hoh - lol) * 100, 13)
+    bool is_blue_prev = (fundtrend[1] < bullbearline[1]) and (fundtrend[1] > fundtrend[2] * 0.95)
+    bool is_green_now = (fundtrend > bullbearline)
+    int signal_b2g = is_blue_prev and is_green_now ? 1 : 0
+    [fundtrend, bullbearline, fundtrend[1], bullbearline[1], signal_b2g]
+
+// Color: yellow first (banker), then white-status, green, blue, red.
+// Display ⚪ uses signal_b2g and does NOT exclude yellow.

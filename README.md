@@ -24,7 +24,7 @@
 | 條件 | 說明 |
 |------|------|
 | 黃燭 (yellow) | fundtrend 上穿 bullbear，且 bullbear &lt; 25（is_banker） |
-| 白圓 (white_circle) | 昨 status=藍 + 今=綠 + 今非黃燭 |
+| 白圓 (white_circle) | TV `signal_b2g`：昨藍 + 今綠（**唔**互斥黃燭；可同日黃燭+⚪，如 PBW） |
 
 未完成日線 bar 喺美東 **16:15** 前會丟掉。
 
@@ -174,3 +174,9 @@ Docs: [`docs/timing-filter-LOCKED.md`](docs/timing-filter-LOCKED.md) · [`docs/t
 - Local CSVs: `out/pulse_events.csv` + `out/pulse_ff_state.csv`
 
 Formulas: Fund Flow = ExtraScan `fund_flow_state` (color green/blue/red/white_status); zhuli = `write_zhuli_lm` (no stock filters on this ETF universe); MCDX = Pine Craft (`SMA10(PC)` cross `SMA10(LC)`; PC=`fmcdx(C×0.96)`, LC=`100−fmcdx(C×1.04)`, LEN=100). ⑥ `whale_hit` = `pulse_layers_56`（同 banker `whale_hit`）. ⑤ `pulse_bottom_5` = RS stop_ll onset + RSP/SPY slope20>0 within +10TD（live emit on breadth-confirm day; `signal_date`=onset）.
+
+## TV alignment (2026-10-28)
+
+White circle matches Philip's TradingView **ETF Heatmap (0-40) Bulletproof Logic** `signal_b2g` (prev blue → now green). Yellow banker entry no longer excludes white — a symbol can land in **both** `yellowETF` and `whiteETF` (TV: yellow bgcolor + ⚪ prefix).
+
+Sheets write is skipped (exit 2) unless ≥90% of screened symbols' last daily bar equals the prior complete US cash session. Cron ≈ 17:30 ET so Yahoo bars usually carry that session date.

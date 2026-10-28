@@ -10,7 +10,7 @@
 
 | 訊號 | 定義（Sheet Ops 會標） | 你點用 |
 |--|--|--|
-| **白圓 white_circle** | 藍→綠過渡路徑上嘅白圓（fundtrend 路徑；**唔係** histogram 嘅 white_status） | 常當 **初動** 候選；可真可假 |
+| **白圓 white_circle** | 藍→綠過渡路徑上嘅白圓（TV signal_b2g；**唔**互斥黃燭；**唔係** histogram 嘅 white_status） | 常當 **初動** 候選；可真可假 |
 | **ft≥50** | fundtrend ≥ 50 | 同白圓一齊睇「資金強度」；高位白≥50 後轉紅＝見頂早警樣 |
 | **黃燭 yellow** | `crossover(fundtrend, bull) & bull < 25` | **稀黃**＝早期初動樣；個股／ETF 上唔稀有但唔保證真底 |
 | **綠 green** | fundtrend 在 bull 之上且非 momentum_drop | **加固**關鍵：轉勢窗 turn／確認後綠％要佔優 |

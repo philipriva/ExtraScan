@@ -90,9 +90,11 @@ def fund_flow_state(df: pd.DataFrame) -> dict | None:
       ft_ge_50, white_circle, yellow
     or None if insufficient bars / NaN.
 
-    Color priority (same-day): green > white_status > blue > red.
-    white_circle = prev BLUE + today GREEN + not yellow (mutual exclusion).
-    yellow = crossover(fundtrend, bull) & bull < 25 (附註 only; not a hard gate).
+    Color / flags aligned to Philip TV "ETF Heatmap Bulletproof Logic" (2026-10-28):
+      yellow = crossover(fundtrend, bull) & bull < 25 (banker entry; color priority over green).
+      white_circle = TV signal_b2g: prev BLUE + today GREEN — does NOT exclude yellow
+        (TV draws ⚪ even when cell bgcolor is yellow, e.g. PBW).
+      Status colors otherwise: white_status / green / blue / red.
     """
     if df is None or len(df) < MIN_BARS:
         return None
@@ -118,7 +120,8 @@ def fund_flow_state(df: pd.DataFrame) -> dict | None:
     momentum_drop = fundtrend < (fundtrend.shift(1).fillna(0.0) * MOMENTUM_DROP_RATIO)
     crossover = (fundtrend > bull) & (fundtrend.shift(1) <= bull.shift(1))
     is_banker = (crossover & (bull < BANKER_BB_MAX)) == True
-    is_rebound = is_under & (~momentum_drop)
+    # TV is_blue: under & fundtrend > prev*0.95 (strict >; not >= via ~momentum_drop).
+    is_rebound = is_under & (fundtrend > (fundtrend.shift(1).fillna(0.0) * MOMENTUM_DROP_RATIO))
 
     status = pd.Series(RED, index=df.index, dtype=int)
     status = status.mask(is_over & momentum_drop, WHITE)
@@ -126,7 +129,8 @@ def fund_flow_state(df: pd.DataFrame) -> dict | None:
     status = status.mask(~is_over & is_rebound, BLUE)
     status = status.mask(~is_over & ~is_rebound, RED)
 
-    white = ((status == BLUE).shift(1) == True) & (status == GREEN) & (~is_banker)
+    # TV signal_b2g: no yellow mutual exclusion (⚪ can coexist with yellow).
+    white = ((status == BLUE).shift(1) == True) & (status == GREEN)
 
     ft = float(fundtrend.iloc[-1])
     bb = float(bull.iloc[-1])
@@ -274,6 +278,44 @@ def drop_forming(d: pd.DataFrame) -> pd.DataFrame:
     return d
 
 
+
+def last_complete_us_session_date(now: datetime | None = None) -> date:
+    """Prior complete US cash session date (America/New_York).
+
+    After 16:00 ET, today's daily bar is complete → expect today (weekdays).
+    Before 16:00 ET, expect the previous weekday. Weekends roll back to Friday.
+    """
+    now = now or ny_now()
+    d = now.date()
+    if (now.hour, now.minute) < (16, 0):
+        d = d - timedelta(days=1)
+    while d.weekday() >= 5:  # Sat/Sun
+        d = d - timedelta(days=1)
+    return d
+
+
+def asof_session_str(session: date | None = None) -> str:
+    """Stamp Sheet rows with the session bar date, not the wall-clock run time."""
+    session = session or last_complete_us_session_date()
+    return f"{session.isoformat()} EOD ET"
+
+
+def freshness_ok(bar_dates: list[date], expected: date, min_frac: float = 0.90) -> tuple[bool, dict]:
+    """Require most screened symbols' last bar == expected complete session."""
+    n = len(bar_dates)
+    if n == 0:
+        return False, {"screened": 0, "fresh": 0, "frac": 0.0, "expected": expected.isoformat()}
+    fresh = sum(1 for d in bar_dates if d == expected)
+    frac = fresh / n
+    info = {
+        "screened": n,
+        "fresh": fresh,
+        "frac": round(frac, 4),
+        "expected": expected.isoformat(),
+        "unique_last_bars": sorted({d.isoformat() for d in set(bar_dates)}),
+    }
+    return frac >= min_frac, info
+
 def normalize_ohlc(df: pd.DataFrame) -> pd.DataFrame | None:
     cols = {str(c).lower(): c for c in df.columns}
     if not all(k in cols for k in ("open", "high", "low", "close")):
@@ -399,7 +441,9 @@ def screen_split(
     yellow: list[str] = []
     white: list[str] = []
     norm_fail: list[str] = []
+    bar_dates: list[date] = []
     screened = 0
+    expected = last_complete_us_session_date()
     for sym in syms:
         raw = data.get(sym)
         if raw is None:
@@ -419,12 +463,14 @@ def screen_split(
             norm_fail.append(sym)
             continue
         screened += 1
+        bar_dates.append(pd.Timestamp(ohlc.index[-1]).date())
         if y:
             yellow.append(sym)
         if w:
             white.append(sym)
     yellow = sorted(set(yellow))
     white = sorted(set(white))
+    ok_fresh, fresh_info = freshness_ok(bar_dates, expected)
     stats = {
         "label": label,
         "universe": len(syms),
@@ -435,7 +481,17 @@ def screen_split(
         "yellow": len(yellow),
         "white": len(white),
         "download_failed_symbols": sorted(dl_failed),
+        "expected_session": expected.isoformat(),
+        "fresh_ok": ok_fresh,
+        "fresh_info": fresh_info,
     }
+    print(
+        f"[{label}] freshness expected={expected} "
+        f"fresh={fresh_info.get('fresh')}/{fresh_info.get('screened')} "
+        f"frac={fresh_info.get('frac')} ok={ok_fresh} "
+        f"bars={fresh_info.get('unique_last_bars')}",
+        flush=True,
+    )
     print(
         f"[{label}] Y={len(yellow)} W={len(white)} "
         f"dl_ok={stats['download_ok']} dl_fail={stats['download_failed']} "
@@ -520,7 +576,8 @@ def main() -> int:
     )
     args = ap.parse_args()
     cwd = Path.cwd()
-    asof = asof_et_str()
+    session = last_complete_us_session_date()
+    asof = asof_session_str(session)
     etf_path = Path(args.etf_list)
     if not etf_path.is_absolute():
         etf_path = cwd / etf_path
@@ -591,8 +648,24 @@ def main() -> int:
         else tab_map
     )
 
+    stale = [st for st in all_stats if not st.get("fresh_ok", True)]
+    if stale:
+        print(
+            "FRESHNESS FAIL: last bar is not the prior complete US session — "
+            "skip Sheets write so yesterday is not overwritten with stale Yahoo bars.",
+            flush=True,
+        )
+        for st in stale:
+            print(f"  stale label={st.get('label')} info={st.get('fresh_info')}", flush=True)
+
     stats_path = cwd / args.out_dir / "download_stats.txt"
-    lines = [f"run_timestamp={hkt_now_str()}", f"asof_et={asof}", ""]
+    lines = [
+        f"run_timestamp={hkt_now_str()}",
+        f"asof_et={asof}",
+        f"expected_session={session.isoformat()}",
+        f"sheets_write={'skip_stale' if stale else 'pending'}",
+        "",
+    ]
     for st in all_stats:
         lines.append(f"label={st['label']}")
         for k in (
@@ -603,8 +676,13 @@ def main() -> int:
             "screened_ok",
             "yellow",
             "white",
+            "expected_session",
+            "fresh_ok",
         ):
-            lines.append(f"{k}={st[k]}")
+            if k in st:
+                lines.append(f"{k}={st[k]}")
+        if st.get("fresh_info"):
+            lines.append(f"fresh_info={st['fresh_info']}")
         lines.append("download_failed_symbols:")
         fails = st.get("download_failed_symbols") or []
         lines.extend(fails if fails else ["(none)"])
@@ -615,6 +693,14 @@ def main() -> int:
     )
     stats_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"wrote {stats_path}", flush=True)
+
+    if stale:
+        print(
+            f"done (NO SHEETS) | Y_ALL={len(yellow_all)} W_ALL={len(white_all)} "
+            f"Y_ETF={len(yellow_etf)} W_ETF={len(white_etf)}",
+            flush=True,
+        )
+        return 2
 
     maybe_write_sheets(cfg, sheets_map)
     print(

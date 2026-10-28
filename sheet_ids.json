@@ -15,7 +15,7 @@
   },
   "notes": {
     "created": "2026-10-20",
-    "schedule": "US cash close +15m Mon–Fri (GitHub cron UTC: 15 20 * * 1-5 ≈ 16:15 EDT)",
+    "schedule": "US cash close ~+90m Mon–Fri (GitHub cron UTC: 30 21 * * 1-5 ≈ 17:30 EDT); Sheets write only if last bar = prior complete US session; white_circle = TV signal_b2g (no yellow mutex)",
     "qqscan": "Col A ← Strong_Stocks; Col J ← Maggiestocks; Col G ← yellowETF∪whiteETF + holdings leaders; Col H ← yellowALL∪whiteballALL; Col L ← weekly 主力做多上穿做空; Col M ← daily 主力做多上穿做空. Row 1 = source labels; symbols from row 2. Clear+overwrite each column on its workflow.",
     "etf_leaders": "Input: yellowETF + whiteETF column A (union). Output: QQscan!F sorted unique leaders. Workflow: etf_leaders.yml. Reuses GOOGLE_SERVICE_ACCOUNT_JSON; no Schwab login.",
     "zhuli_lm": "write_zhuli_lm.py / zhuli_lm.yml. Universe=US ex-ETF. Filters mcap>100M vol>300k close>$5 close>EMA200. Cron 45 21 * * 1-5 + backup 30 0 * * 2-6. Reuses GOOGLE_SERVICE_ACCOUNT_JSON."
