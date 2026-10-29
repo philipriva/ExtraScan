@@ -3,11 +3,15 @@ name: Daily ExtraScan
 on:
   schedule:
     # GitHub Actions cron is UTC only (no CRON_TZ).
-    # 30 21 * * 1-5 ≈ Mon–Fri 17:30 America/New_York during EDT (UTC-4).
-    # During EST (UTC-5) change to: 30 22 * * 1-5
+    # Primary: 30 21 * * 1-5 ≈ Mon–Fri 17:30 America/New_York during EDT (UTC-4).
+    # During EST (UTC-5) change primary to: 30 22 * * 1-5
     # Later than cash+15m so Yahoo daily bars usually show the session date;
     # run_extrascan also refuses Sheets write if last bar ≠ prior complete session.
     - cron: "30 21 * * 1-5"
+    # Backup: Tue–Sat 06:00 UTC ≈ 15:00 JST / 02:00 ET — Yahoo full-universe
+    # bars often incomplete at the primary window (2026-10-29 schedule failed
+    # freshness at ~01:05 UTC with frac~0.29; same-day manual ~06:25 UTC OK).
+    - cron: "0 6 * * 2-6"
   workflow_dispatch:
     inputs:
       etf_only:
