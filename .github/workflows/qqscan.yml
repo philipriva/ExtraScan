@@ -23,7 +23,7 @@ on:
     # Backup:  15 4 * * 2-6 ≈ 12:15 HKT Tue–Sat (catch skipped/delayed primary;
     #          still far from Fund Flow ExtraScan at 15 20 * * 1-5 UTC).
     # File-driven: Strong + Maggie repository_dispatch write A/J without waiting on cron.
-    - cron: "30 2 * * 2-6"
+    - cron: "0 1 * * 2-6"
     - cron: "15 4 * * 2-6"
   workflow_dispatch:
     inputs:
