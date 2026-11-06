@@ -384,6 +384,7 @@ def screen(syms: list[str]) -> tuple[list[str], list[str], dict, list]:
     stats["mcap_pass"] = len(cap_ok)
     stats["L"] = len(hits_l)
     stats["M"] = len(hits_m)
+    stats["missing_count"] = max(0, len(syms) - len(bar_dates))
     print(f"post-mcap L={len(hits_l)} M={len(hits_m)}", flush=True)
     return hits_l, hits_m, stats, bar_dates
 
@@ -475,8 +476,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     hits_l, hits_m, stats, bar_dates = screen(syms)
     target_session = last_complete_us_session_date()
-    ok_fresh, fresh_info = freshness_ok(bar_dates, target_session)
-    dist = bar_distribution(bar_dates, target_session)
+    missing_n = int(stats.get("missing_count") or max(0, len(syms) - len(bar_dates)))
+    ok_fresh, fresh_info = freshness_ok(
+        bar_dates, target_session, missing_count=missing_n
+    )
+    dist = bar_distribution(bar_dates, target_session, missing_count=missing_n)
     print(
         f"freshness expected={target_session} fresh={fresh_info.get('fresh')}/"
         f"{fresh_info.get('screened')} frac={fresh_info.get('frac')} ok={ok_fresh} "
@@ -513,17 +517,30 @@ def main(argv: Optional[list[str]] = None) -> int:
         exit_code = 4
     else:
         sheets_info["attempted"] = True
-        n_l = write_column(
-            sa, args.sheet_id, TAB_QQ, "L", hits_l, header=QQSCAN_HEADERS["L"]
+        n_l, rb_l = write_column(
+            sa,
+            args.sheet_id,
+            TAB_QQ,
+            "L",
+            hits_l,
+            header=QQSCAN_HEADERS["L"],
+            do_readback=True,
         )
-        n_m = write_column(
-            sa, args.sheet_id, TAB_QQ, "M", hits_m, header=QQSCAN_HEADERS["M"]
+        n_m, rb_m = write_column(
+            sa,
+            args.sheet_id,
+            TAB_QQ,
+            "M",
+            hits_m,
+            header=QQSCAN_HEADERS["M"],
+            do_readback=True,
         )
         if not args.skip_headers_refresh:
             refresh_qqscan_headers_preserving(sa, args.sheet_id)
         sheets_info["written"] = True
         sheets_info["L"] = n_l
         sheets_info["M"] = n_m
+        sheets_info["readback"] = {"L": rb_l, "M": rb_m}
         print(f"QQscan done L={n_l} M={n_m}", flush=True)
 
     # Cap ticker map in artifact size

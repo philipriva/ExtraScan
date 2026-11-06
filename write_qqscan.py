@@ -297,20 +297,34 @@ def main(argv: Optional[list[str]] = None) -> int:
         },
     ]
 
-    status = "OK"
+    # Filename date is publish metadata only — never elevate to verified OK.
+    # Upstream Strong/Maggie txts contain tickers only (confirmed in scan.py).
+    status = "UNKNOWN"
     exit_code = 0
     if args.dry_run:
         sheets_info["skipped_reason"] = "dry_run"
         status = "DRY_RUN"
-        print("dry-run OK (both sources resolved; no Sheet write)", flush=True)
+        print(
+            "dry-run OK (both sources resolved by filename; bar dates UNKNOWN; no Sheet write)",
+            flush=True,
+        )
     else:
         sheets_info["attempted"] = True
-        n_a = write_column(sa, args.sheet_id, TAB, "A", strong, header=QQSCAN_HEADERS["A"])
-        n_j = write_column(sa, args.sheet_id, TAB, "J", maggie, header=QQSCAN_HEADERS["J"])
+        n_a, rb_a = write_column(
+            sa, args.sheet_id, TAB, "A", strong, header=QQSCAN_HEADERS["A"], do_readback=True
+        )
+        n_j, rb_j = write_column(
+            sa, args.sheet_id, TAB, "J", maggie, header=QQSCAN_HEADERS["J"], do_readback=True
+        )
         sheets_info["written"] = True
         sheets_info["A"] = n_a
         sheets_info["J"] = n_j
-        print(f"QQscan done A={n_a} J={n_j}", flush=True)
+        sheets_info["readback"] = {"A": rb_a, "J": rb_j}
+        print(f"QQscan done A={n_a} J={n_j} (status=UNKNOWN filename-only)", flush=True)
+
+    for s in sources_meta:
+        s["input_bar_date_proof"] = "NONE"
+        s["verification"] = "FILENAME_ESTIMATE_ONLY"
 
     write_verify_meta(
         meta_path,
@@ -319,12 +333,16 @@ def main(argv: Optional[list[str]] = None) -> int:
             "status": status,
             "target_session": target_session.isoformat(),
             "expected_upstream_file_date": need_file.isoformat(),
+            "bar_proof": False,
             "sources": sources_meta,
             "sheets": sheets_info,
             "notes": [
-                "Filename→session mapping is estimated (file_date - 1 day); "
-                "txt bodies have no OHLC bar dates (metadata limitation).",
-                "Both A and J validated before any Sheet write.",
+                "status=UNKNOWN: filename→session is estimate only; txt has no OHLC bar dates.",
+                "Cannot promote filename alone to verified OK for DATA READY.",
+                "Upstream repos philipriva/my-stock-scanner + philipriva/Q-scanner "
+                "write tickers only (FILE_NAME uses local datetime.now date).",
+                "Both A and J filename-validated before any Sheet write.",
+                "External fix needed in upstream scanners to emit session/bar metadata.",
             ],
         },
     )
