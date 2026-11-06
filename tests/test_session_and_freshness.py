@@ -372,6 +372,7 @@ class TestPulseStaleSkipsSheets(unittest.TestCase):
             index=idx,
         )
         univ = Path("out/_test_univ2.csv")
+        univ.parent.mkdir(parents=True, exist_ok=True)
         univ.write_text("ticker,layer\nAAA,test\n", encoding="utf-8")
         writes = []
 
