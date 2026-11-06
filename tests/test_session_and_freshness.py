@@ -663,14 +663,8 @@ class TestProducerConsumerContract(unittest.TestCase):
     """Feed ExtraScan consumer with artifacts from upstream scan_meta producer."""
 
     def test_roundtrip_producer_meta(self):
-        # Import producer module from Strong clone path if present; else inline minimal.
-        strong_root = Path("/workspace/my-stock-scanner-meta-20261106-132715")
-        sys.path.insert(0, str(strong_root))
-        try:
-            from scan_meta import build_scan_meta, write_list_and_meta, verify_meta_against_list
-        finally:
-            sys.path.pop(0)
-
+        # Producer schema lives in-repo as scan_meta.py (same contract as upstream scanners).
+        from scan_meta import build_scan_meta, write_list_and_meta, verify_meta_against_list
         from qqscan_upstream_meta import verify_sidecar
 
         tickers = ["AAA", "CCC"]
