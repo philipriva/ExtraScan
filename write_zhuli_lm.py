@@ -144,7 +144,7 @@ def normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame | None:
     ).dropna()
     if not isinstance(out.index, pd.DatetimeIndex):
         out.index = pd.to_datetime(out.index)
-    return out if len(out) >= MIN_DAILY_BARS else None
+    return out if len(out) else None
 
 
 def to_weekly(d: pd.DataFrame) -> pd.DataFrame:
@@ -346,12 +346,17 @@ def screen(syms: list[str]) -> tuple[list[str], list[str], dict, list]:
             stats["norm_fail"] += 1
             continue
         d = drop_forming(d)
-        if d is None or len(d) < MIN_DAILY_BARS:
+        if d is None or len(d) == 0:
             stats["norm_fail"] += 1
             continue
+        # Real last completed OHLCV bar is recorded BEFORE the lookback filter:
+        # short history = fresh data but ineligible for signals (not "missing").
         last_bar = session_bar_date(d.index[-1])
         bar_dates.append(last_bar)
         bar_by_ticker[sym] = last_bar.isoformat()
+        if len(d) < MIN_DAILY_BARS:
+            stats["short_history"] = stats.get("short_history", 0) + 1
+            continue
         if not daily_filters_ok(d):
             stats["filter_fail"] += 1
             continue
