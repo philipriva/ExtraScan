@@ -138,13 +138,13 @@ def freshness_ok(
     min_frac: float = DEFAULT_MIN_FRESH_FRAC,
     *,
     missing_count: int = 0,
-    min_coverage: float = 0.85,
+    min_coverage: float = 0.80,
 ) -> tuple[bool, dict[str, Any]]:
     """Bar-freshness and coverage gates (fail-closed; does not lower 0.90).
 
     - bar_frac = fresh/screened must be >= min_frac (approved 0.90).
       Missing tickers cannot inflate this ratio.
-    - coverage = screened/(screened+missing) must be >= min_coverage (default 0.85)
+    - coverage = screened/(screened+missing) must be >= min_coverage (default 0.80)
       so a near-empty download cannot PASS just because the few bars look fresh.
     - universe_frac = fresh/(screened+missing) is reported for audit only
       (not the PASS gate — full Nasdaq directories always contain no-data symbols).

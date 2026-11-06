@@ -188,7 +188,7 @@ class TestFreshnessOk(unittest.TestCase):
         self.assertTrue(ok_no_miss)
         self.assertFalse(ok_miss)
         self.assertEqual(info["bar_frac"], 1.0)
-        self.assertLess(info["coverage"], 0.85)
+        self.assertLess(info["coverage"], 0.80)
         self.assertEqual(info["missing_count"], 20)
 
     def test_bar_frac_gate_still_0_90(self):
