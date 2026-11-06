@@ -18,6 +18,7 @@ NY = ZoneInfo("America/New_York")
 
 # Approved Daily ExtraScan threshold — do not lower.
 DEFAULT_MIN_FRESH_FRAC = 0.90
+FRESHNESS_POLICY_VERSION = "fresh_over_universe_v1"  # fresh/(actual_bars+missing) >= 0.90
 
 
 class CalendarUnavailableError(RuntimeError):
@@ -160,6 +161,11 @@ def freshness_ok(
             "expected": expected.isoformat(),
             "unique_last_bars": [],
             "min_frac": min_frac,
+            "policy_version": FRESHNESS_POLICY_VERSION,
+            "universe_total": 0,
+            "actual_complete_bar_count": 0,
+            "stale_count": 0,
+            "future_count": 0,
         }
     # Future bars relative to expected are not fresh (and signal unknown/bad clock).
     fresh = sum(1 for d in bar_dates if d == expected)
@@ -175,6 +181,11 @@ def freshness_ok(
         "min_frac": min_frac,
         "future_count": sum(1 for d in bar_dates if d > expected),
         "stale_count": sum(1 for d in bar_dates if d < expected),
+        # Explicit audit fields (legacy "screened" above = actual_complete_bar_count,
+        # NOT signal eligibility).
+        "policy_version": FRESHNESS_POLICY_VERSION,
+        "universe_total": denom,
+        "actual_complete_bar_count": screened,
     }
     return frac >= min_frac, info
 
