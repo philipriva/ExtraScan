@@ -281,19 +281,18 @@ class TestQqscanAtomicWrite(unittest.TestCase):
             qq, "last_complete_us_session_date", return_value=date(2026, 11, 5)
         ), patch.object(qq, "_latest_txt", side_effect=latest), patch.object(
             qq, "_fetch_symbols", side_effect=[["AAA"], ["BBB"]]
-        ), patch.object(qq, "write_column", side_effect=fake_write), patch.dict(
-            "os.environ", {"GOOGLE_SERVICE_ACCOUNT_JSON": "{}"}, clear=False
-        ):
+        ), patch.object(qq, "_fetch_meta", return_value=None), patch.object(
+            qq, "write_column", side_effect=fake_write
+        ), patch.dict("os.environ", {"GOOGLE_SERVICE_ACCOUNT_JSON": "{}"}, clear=False):
             rc = qq.main(["--wait-secs", "0"])
-        self.assertEqual(rc, 0)
-        self.assertEqual(writes, ["A", "J"])
+        # Filename alone → UNKNOWN, no Sheet write (unless --allow-filename-only)
+        self.assertEqual(rc, 6)
+        self.assertEqual(writes, [])
         meta = json.loads(Path("out/qqscan_verify.json").read_text())
         self.assertEqual(meta["status"], "UNKNOWN")
         self.assertFalse(meta.get("bar_proof", True))
-        self.assertTrue(meta["sheets"]["written"])
+        self.assertFalse(meta["sheets"]["written"])
         self.assertEqual(meta["expected_upstream_file_date"], "2026-11-06")
-        self.assertFalse(meta["sources"][0]["bar_dates_in_file"])
-        self.assertIn("readback", meta["sheets"])
 
 
 class TestPulseStaleSkipsSheets(unittest.TestCase):
@@ -524,3 +523,184 @@ class TestWorkflowSafety(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestQqscanSidecarGate(unittest.TestCase):
+    def _meta(self, tickers, session="2026-11-05", status="OK"):
+        from qqscan_upstream_meta import payload_hash
+
+        norm = [t.upper() for t in tickers]
+        return {
+            "schema_version": 1,
+            "status": status,
+            "target_session": session,
+            "payload": {"count": len(norm), "sha256": payload_hash(norm)},
+            "input_bars": {"fresh_ok": True, "frac": 1.0},
+            "selected_last_bars": {
+                "n": len(norm),
+                "all_match_target": True,
+                "by_ticker": {t: session for t in norm},
+            },
+        }
+
+    def test_verified_both_writes(self):
+        writes = []
+
+        def fake_write(sa, sheet_id, tab, col, symbols, header=None, do_readback=False):
+            writes.append(col)
+            rb = {
+                "written_n": len(symbols),
+                "readback_n": len(symbols),
+                "count_match": True,
+                "sample_match": True,
+                "readback_sample": list(symbols)[:10],
+            }
+            return (len(symbols), rb) if do_readback else len(symbols)
+
+        strong_meta = self._meta(["AAA"])
+        maggie_meta = self._meta(["BBB"])
+
+        def latest(owner_repo, prefix):
+            if "my-stock" in owner_repo:
+                return "Strong_Stocks_V3_20261106.txt", "http://example/s.txt"
+            return "Maggiestocks_20261106.txt", "http://example/m.txt"
+
+        with patch.object(qq, "last_complete_us_session_date", return_value=date(2026, 11, 5)), patch.object(
+            qq, "_latest_txt", side_effect=latest
+        ), patch.object(qq, "_fetch_symbols", side_effect=[["AAA"], ["BBB"]]), patch.object(
+            qq, "_fetch_meta", side_effect=[strong_meta, maggie_meta]
+        ), patch.object(qq, "write_column", side_effect=fake_write), patch.dict(
+            "os.environ", {"GOOGLE_SERVICE_ACCOUNT_JSON": "{}"}, clear=False
+        ):
+            rc = qq.main(["--wait-secs", "0"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(writes, ["A", "J"])
+        meta = json.loads(Path("out/qqscan_verify.json").read_text())
+        self.assertEqual(meta["status"], "OK")
+        self.assertTrue(meta["bar_proof"])
+
+    def test_hash_mismatch_rejects_no_write(self):
+        writes = []
+
+        def fake_write(*a, **k):
+            writes.append(a)
+            return 0
+
+        bad = self._meta(["AAA"])
+        bad["payload"]["sha256"] = "deadbeef"
+
+        def latest(owner_repo, prefix):
+            if "my-stock" in owner_repo:
+                return "Strong_Stocks_V3_20261106.txt", "http://example/s.txt"
+            return "Maggiestocks_20261106.txt", "http://example/m.txt"
+
+        with patch.object(qq, "last_complete_us_session_date", return_value=date(2026, 11, 5)), patch.object(
+            qq, "_latest_txt", side_effect=latest
+        ), patch.object(qq, "_fetch_symbols", side_effect=[["AAA"], ["BBB"]]), patch.object(
+            qq, "_fetch_meta", side_effect=[bad, self._meta(["BBB"])]
+        ), patch.object(qq, "write_column", side_effect=fake_write), patch.dict(
+            "os.environ", {"GOOGLE_SERVICE_ACCOUNT_JSON": "{}"}, clear=False
+        ):
+            rc = qq.main(["--wait-secs", "0"])
+        self.assertEqual(rc, 5)
+        self.assertEqual(writes, [])
+        meta = json.loads(Path("out/qqscan_verify.json").read_text())
+        self.assertEqual(meta["status"], "REJECT")
+
+    def test_missing_sidecar_unknown_no_write(self):
+        writes = []
+
+        def fake_write(*a, **k):
+            writes.append(a)
+            return 0
+
+        def latest(owner_repo, prefix):
+            if "my-stock" in owner_repo:
+                return "Strong_Stocks_V3_20261106.txt", "http://example/s.txt"
+            return "Maggiestocks_20261106.txt", "http://example/m.txt"
+
+        with patch.object(qq, "last_complete_us_session_date", return_value=date(2026, 11, 5)), patch.object(
+            qq, "_latest_txt", side_effect=latest
+        ), patch.object(qq, "_fetch_symbols", side_effect=[["AAA"], ["BBB"]]), patch.object(
+            qq, "_fetch_meta", return_value=None
+        ), patch.object(qq, "write_column", side_effect=fake_write), patch.dict(
+            "os.environ", {"GOOGLE_SERVICE_ACCOUNT_JSON": "{}"}, clear=False
+        ):
+            rc = qq.main(["--wait-secs", "0"])
+        self.assertEqual(rc, 6)
+        self.assertEqual(writes, [])
+        meta = json.loads(Path("out/qqscan_verify.json").read_text())
+        self.assertEqual(meta["status"], "UNKNOWN")
+
+    def test_session_mismatch_reject(self):
+        writes = []
+
+        def fake_write(*a, **k):
+            writes.append(a)
+            return 0
+
+        strong = self._meta(["AAA"], session="2026-11-04")
+        maggie = self._meta(["BBB"])
+
+        def latest(owner_repo, prefix):
+            if "my-stock" in owner_repo:
+                return "Strong_Stocks_V3_20261106.txt", "http://example/s.txt"
+            return "Maggiestocks_20261106.txt", "http://example/m.txt"
+
+        with patch.object(qq, "last_complete_us_session_date", return_value=date(2026, 11, 5)), patch.object(
+            qq, "_latest_txt", side_effect=latest
+        ), patch.object(qq, "_fetch_symbols", side_effect=[["AAA"], ["BBB"]]), patch.object(
+            qq, "_fetch_meta", side_effect=[strong, maggie]
+        ), patch.object(qq, "write_column", side_effect=fake_write), patch.dict(
+            "os.environ", {"GOOGLE_SERVICE_ACCOUNT_JSON": "{}"}, clear=False
+        ):
+            rc = qq.main(["--wait-secs", "0"])
+        self.assertEqual(rc, 5)
+        self.assertEqual(writes, [])
+
+
+class TestProducerConsumerContract(unittest.TestCase):
+    """Feed ExtraScan consumer with artifacts from upstream scan_meta producer."""
+
+    def test_roundtrip_producer_meta(self):
+        # Import producer module from Strong clone path if present; else inline minimal.
+        strong_root = Path("/workspace/my-stock-scanner-meta-20261106-132715")
+        sys.path.insert(0, str(strong_root))
+        try:
+            from scan_meta import build_scan_meta, write_list_and_meta, verify_meta_against_list
+        finally:
+            sys.path.pop(0)
+
+        from qqscan_upstream_meta import verify_sidecar
+
+        tickers = ["AAA", "CCC"]
+        meta = build_scan_meta(
+            source_id="philipriva/my-stock-scanner:Strong_Stocks_V3",
+            list_filename="Strong_Stocks_V3_20261106.txt",
+            tickers=tickers,
+            target_session=date(2026, 11, 5),
+            universe_n=10,
+            bar_dates_all=[date(2026, 11, 5)] * 10,
+            missing_count=0,
+            selected_bar_dates={"AAA": "2026-11-05", "CCC": "2026-11-05"},
+        )
+        lp, mp = write_list_and_meta("out/_contract_strong.txt", tickers, meta)
+        loaded = json.loads(mp.read_text())
+        body = [ln.strip() for ln in lp.read_text().splitlines() if ln.strip()]
+        ok, msg = verify_meta_against_list(loaded, body)
+        self.assertTrue(ok, msg)
+        status, notes = verify_sidecar(
+            meta=loaded,
+            tickers=body,
+            target_session=date(2026, 11, 5),
+            source_kind="Strong_Stocks",
+        )
+        self.assertEqual(status, "VERIFIED", notes)
+        # count mismatch must reject
+        status2, _ = verify_sidecar(
+            meta=loaded,
+            tickers=["AAA"],
+            target_session=date(2026, 11, 5),
+            source_kind="Strong_Stocks",
+        )
+        self.assertEqual(status2, "REJECT")
