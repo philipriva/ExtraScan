@@ -668,6 +668,7 @@ class TestProducerConsumerContract(unittest.TestCase):
         from qqscan_upstream_meta import verify_sidecar
 
         tickers = ["AAA", "CCC"]
+        Path("out").mkdir(parents=True, exist_ok=True)
         meta = build_scan_meta(
             source_id="philipriva/my-stock-scanner:Strong_Stocks_V3",
             list_filename="Strong_Stocks_V3_20261106.txt",
