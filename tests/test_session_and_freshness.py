@@ -178,25 +178,16 @@ class TestFreshnessOk(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(info["screened"], 0)
 
-    def test_missing_coverage_gate_not_pass(self):
-        # Bar frac stays 1.0 (missing cannot inflate it); low coverage fails.
+    def test_missing_inflates_denom_not_pass(self):
+        # 9/9 screened fresh would pass without missing; 9/(9+2)=0.818 fails 0.90
         expected = date(2026, 11, 5)
         bars = [expected] * 9
         ok_no_miss, _ = freshness_ok(bars, expected, missing_count=0)
-        # 9/(9+20)=0.31 coverage < 0.85
-        ok_miss, info = freshness_ok(bars, expected, missing_count=20)
+        ok_miss, info = freshness_ok(bars, expected, missing_count=2)
         self.assertTrue(ok_no_miss)
         self.assertFalse(ok_miss)
-        self.assertEqual(info["bar_frac"], 1.0)
-        self.assertLess(info["coverage"], 0.80)
-        self.assertEqual(info["missing_count"], 20)
-
-    def test_bar_frac_gate_still_0_90(self):
-        expected = date(2026, 11, 5)
-        bars = [expected] * 8 + [date(2026, 11, 4)] * 2  # bar_frac=0.8
-        ok, info = freshness_ok(bars, expected, missing_count=0)
-        self.assertFalse(ok)
-        self.assertEqual(info["bar_frac"], 0.8)
+        self.assertEqual(info["denom"], 11)
+        self.assertEqual(info["missing_count"], 2)
 
     def test_future_bars_not_fresh(self):
         expected = date(2026, 11, 5)
@@ -210,8 +201,7 @@ class TestFreshnessOk(unittest.TestCase):
         bars = [expected] * 50  # only half downloaded
         ok, info = freshness_ok(bars, expected, missing_count=50)
         self.assertFalse(ok)
-        self.assertEqual(info["bar_frac"], 1.0)
-        self.assertEqual(info["coverage"], 0.5)
+        self.assertEqual(info["frac"], 0.5)
 
 
 class TestQqscanFileMapping(unittest.TestCase):
