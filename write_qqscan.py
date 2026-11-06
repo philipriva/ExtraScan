@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Fetch latest Strong_Stocks_V3_*.txt + Maggiestocks_*.txt and write QQscan A / J."""
+"""Fetch Strong_Stocks_V3_*.txt + Maggiestocks_*.txt and write QQscan A / J.
+
+Upstream filename convention (observed):
+  Asia-morning publish day D (UTC) carries YYYYMMDD=D and covers the prior
+  complete US cash session (D-1 calendar day). Example: US session 2026-11-05
+  → Strong_Stocks_V3_20261106.txt committed ~2026-11-06 03:32 UTC.
+
+File date is metadata only — txt bodies are symbol lists with no bar dates.
+"""
 from __future__ import annotations
 
 import argparse
@@ -9,11 +17,14 @@ import re
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 import requests
 
+from run_extrascan import last_complete_us_session_date
 from sheets_writer import QQSCAN_HEADERS, write_column
+from verify_meta import write_verify_meta
 
 DEFAULT_SHEET_ID = "1FSOmey7ALHFuYXxZSgjZnjWA5zpmbiv48PWAJD_yYRk"
 TAB = "QQscan"
@@ -72,7 +83,6 @@ def _latest_via_raw_walk(owner_repo: str, prefix: str, days: int = 14) -> tuple[
         r = sess.head(url, timeout=30, allow_redirects=True)
         if r.status_code == 200:
             return name, url
-        # some CDNs dislike HEAD — try GET range
         if r.status_code in (403, 405):
             g = sess.get(url, timeout=30)
             if g.status_code == 200 and g.text.strip():
@@ -98,17 +108,15 @@ def _file_date(name: str) -> date:
     return date(int(s[:4]), int(s[4:6]), int(s[6:8]))
 
 
-def _expected_min_date(now_utc: Optional[datetime] = None) -> date:
-    """Strong/Maggie dated files typically land ~01:40–01:52 UTC on calendar day D.
+def expected_upstream_file_date(target_session: Optional[date] = None) -> date:
+    """Filename YYYYMMDD required for a complete US session.
 
-    After 02:00 UTC we require file date >= today (UTC). Before that, yesterday is OK
-    (still inside the overnight publish window).
+    Observed rule: file date = target_session + 1 calendar day
+    (Asia-morning publish after that US close). No UTC-hour exception —
+    accepting session+0 before 02:00 UTC previously wrote the prior batch.
     """
-    now = now_utc or datetime.now(timezone.utc)
-    d = now.date()
-    if now.hour < 2:
-        return d - timedelta(days=1)
-    return d
+    session = target_session or last_complete_us_session_date()
+    return session + timedelta(days=1)
 
 
 def _assert_fresh(
@@ -116,16 +124,16 @@ def _assert_fresh(
     kind: str,
     *,
     allow_stale: bool,
-    min_date: Optional[date] = None,
+    min_date: date,
 ) -> None:
     got = _file_date(name)
-    need = min_date if min_date is not None else _expected_min_date()
-    if got >= need:
+    if got >= min_date:
         return
     msg = (
-        f"STALE {kind}: selected {name} (date {got.isoformat()}), "
-        f"need >={need.isoformat()} UTC. Upstream not published yet, or this run "
-        f"is too early / a missed prior schedule left Sheet on an old file."
+        f"UPSTREAM_PENDING {kind}: selected {name} (file_date {got.isoformat()}), "
+        f"need >={min_date.isoformat()} for target US session "
+        f"{(min_date - timedelta(days=1)).isoformat()}. "
+        f"Upstream not published yet — refuse prior batch (do not write Sheet)."
     )
     if allow_stale:
         print(f"WARNING: {msg}", flush=True)
@@ -140,9 +148,13 @@ def _latest_fresh(
     *,
     allow_stale: bool,
     wait_secs: int,
-    min_date: Optional[date] = None,
+    min_date: date,
 ) -> tuple[str, str]:
-    """Pick newest dated txt; optionally wait until file date >= min_date."""
+    """Pick newest dated txt; optionally wait until file date >= min_date.
+
+    wait_secs retained for backward compatibility; prefer wait_secs=0 and
+    repository_dispatch / backup cron rather than long polling.
+    """
     deadline = time.time() + max(0, wait_secs)
     last_err: Optional[BaseException] = None
     while True:
@@ -178,13 +190,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument(
         "--allow-stale",
         action="store_true",
-        help="Do not fail when newest file date is older than expected UTC day",
+        help="Do not fail when newest file date is older than expected",
     )
     p.add_argument(
         "--wait-secs",
         type=int,
         default=int(os.environ.get("QQSCAN_WAIT_SECS", "0")),
-        help="Seconds to poll for today's dated file before failing (env QQSCAN_WAIT_SECS)",
+        help="Seconds to poll for required dated file before failing (env QQSCAN_WAIT_SECS)",
     )
     args = p.parse_args(argv)
 
@@ -200,7 +212,20 @@ def main(argv: Optional[list[str]] = None) -> int:
         "yes",
     )
 
-    # Strong first — always land column A even if Maggie is late (do not couple the writes).
+    target_session = last_complete_us_session_date()
+    need_file = expected_upstream_file_date(target_session)
+    print(
+        f"target_session={target_session.isoformat()} "
+        f"expected_upstream_file_date={need_file.isoformat()} "
+        f"(file_date = session+1; filename is metadata, not proof of bar OHLC)",
+        flush=True,
+    )
+
+    meta_path = Path("out/qqscan_verify.json")
+    sheets_info: dict = {"attempted": False, "written": False, "skipped_reason": None}
+    sources_meta: list[dict] = []
+
+    # Resolve BOTH sources before any Sheet write (atomic dependency check).
     try:
         strong_name, strong_url = _latest_fresh(
             STRONG_REPO,
@@ -208,65 +233,103 @@ def main(argv: Optional[list[str]] = None) -> int:
             "Strong_Stocks",
             allow_stale=allow_stale,
             wait_secs=args.wait_secs,
+            min_date=need_file,
         )
-    except RuntimeError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 3
-
-    strong = _fetch_symbols(strong_url)
-    print(f"Source A: {STRONG_REPO}/{strong_name} n={len(strong)}", flush=True)
-    print(
-        f"Strong freshness OK (UTC today={datetime.now(timezone.utc).date().isoformat()}, "
-        f"min={_expected_min_date().isoformat()})",
-        flush=True,
-    )
-
-    if not args.dry_run:
-        n_a = write_column(sa, args.sheet_id, TAB, "A", strong, header=QQSCAN_HEADERS["A"])
-        print(f"QQscan A written n={n_a} file={strong_name}", flush=True)
-    else:
-        n_a = len(strong)
-
-    # Strong often publishes a few minutes before Maggie (repository_dispatch races).
-    # Require Maggiestocks date >= Strong date so we wait instead of writing yesterday's J.
-    maggie_min = max(_expected_min_date(), _file_date(strong_name))
-    print(
-        f"Maggie freshness floor={maggie_min.isoformat()} "
-        f"(max of UTC gate + Strong {_file_date(strong_name).isoformat()})",
-        flush=True,
-    )
-    try:
         maggie_name, maggie_url = _latest_fresh(
             MAGGIE_REPO,
             MAGGIE_PREFIX,
             "Maggiestocks",
             allow_stale=allow_stale,
             wait_secs=args.wait_secs,
-            min_date=maggie_min,
+            min_date=max(need_file, _file_date(strong_name)),
         )
     except RuntimeError as exc:
-        # A is already current; leave J untouched for Maggiestocks dispatch / backup cron.
-        print(
-            f"ERROR: Maggie not ready after wait; column A already updated to {strong_name}. {exc}",
-            file=sys.stderr,
+        print(f"ERROR: {exc}", file=sys.stderr)
+        write_verify_meta(
+            meta_path,
+            {
+                "job": "qqscan_aj",
+                "status": "UPSTREAM_PENDING",
+                "target_session": target_session.isoformat(),
+                "expected_upstream_file_date": need_file.isoformat(),
+                "sources": sources_meta,
+                "sheets": {
+                    "attempted": False,
+                    "written": False,
+                    "skipped_reason": "UPSTREAM_PENDING",
+                },
+                "notes": [
+                    "No Sheet write — refused prior-batch filenames.",
+                    "Filename date is publish metadata; txt has no per-symbol bar dates.",
+                    str(exc),
+                ],
+            },
         )
+        print(f"wrote {meta_path} status=UPSTREAM_PENDING", flush=True)
         return 3
 
+    strong = _fetch_symbols(strong_url)
     maggie = _fetch_symbols(maggie_url)
+    print(f"Source A: {STRONG_REPO}/{strong_name} n={len(strong)}", flush=True)
     print(f"Source J: {MAGGIE_REPO}/{maggie_name} n={len(maggie)}", flush=True)
-    print(
-        f"Freshness OK (UTC today={datetime.now(timezone.utc).date().isoformat()}, "
-        f"min={_expected_min_date().isoformat()}, maggie_min={maggie_min.isoformat()})",
-        flush=True,
-    )
+    sources_meta = [
+        {
+            "column": "A",
+            "repo": STRONG_REPO,
+            "file": strong_name,
+            "file_date": _file_date(strong_name).isoformat(),
+            "n": len(strong),
+            "maps_to_session_estimate": (
+                _file_date(strong_name) - timedelta(days=1)
+            ).isoformat(),
+            "bar_dates_in_file": False,
+        },
+        {
+            "column": "J",
+            "repo": MAGGIE_REPO,
+            "file": maggie_name,
+            "file_date": _file_date(maggie_name).isoformat(),
+            "n": len(maggie),
+            "maps_to_session_estimate": (
+                _file_date(maggie_name) - timedelta(days=1)
+            ).isoformat(),
+            "bar_dates_in_file": False,
+        },
+    ]
 
+    status = "OK"
+    exit_code = 0
     if args.dry_run:
-        print("dry-run OK", flush=True)
-        return 0
+        sheets_info["skipped_reason"] = "dry_run"
+        status = "DRY_RUN"
+        print("dry-run OK (both sources resolved; no Sheet write)", flush=True)
+    else:
+        sheets_info["attempted"] = True
+        n_a = write_column(sa, args.sheet_id, TAB, "A", strong, header=QQSCAN_HEADERS["A"])
+        n_j = write_column(sa, args.sheet_id, TAB, "J", maggie, header=QQSCAN_HEADERS["J"])
+        sheets_info["written"] = True
+        sheets_info["A"] = n_a
+        sheets_info["J"] = n_j
+        print(f"QQscan done A={n_a} J={n_j}", flush=True)
 
-    n_j = write_column(sa, args.sheet_id, TAB, "J", maggie, header=QQSCAN_HEADERS["J"])
-    print(f"QQscan done A={n_a} J={n_j}", flush=True)
-    return 0
+    write_verify_meta(
+        meta_path,
+        {
+            "job": "qqscan_aj",
+            "status": status,
+            "target_session": target_session.isoformat(),
+            "expected_upstream_file_date": need_file.isoformat(),
+            "sources": sources_meta,
+            "sheets": sheets_info,
+            "notes": [
+                "Filename→session mapping is estimated (file_date - 1 day); "
+                "txt bodies have no OHLC bar dates (metadata limitation).",
+                "Both A and J validated before any Sheet write.",
+            ],
+        },
+    )
+    print(f"wrote {meta_path} status={status}", flush=True)
+    return exit_code
 
 
 if __name__ == "__main__":

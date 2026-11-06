@@ -272,11 +272,26 @@ def drop_forming(d: pd.DataFrame) -> pd.DataFrame:
     if d is None or d.empty:
         return d
     now = ny_now()
-    last = pd.Timestamp(d.index[-1]).date()
+    last = session_bar_date(d.index[-1])
     if last == now.date() and (now.hour, now.minute) < (16, 0):
         return d.iloc[:-1]
     return d
 
+
+
+def session_bar_date(idx) -> date:
+    """Calendar date of a daily bar's session label.
+
+    Yahoo/yfinance daily bars are session-labeled. A tz-aware UTC midnight
+    timestamp ``2026-11-05 00:00:00+00:00`` means the 2026-11-05 session, not
+    the ET wall-clock of that instant (which would wrongly become 2026-11-04
+    if converted with tz_convert). Strip tz without converting so the label
+    date is preserved.
+    """
+    ts = pd.Timestamp(idx)
+    if ts.tzinfo is not None:
+        ts = ts.replace(tzinfo=None)
+    return ts.date()
 
 
 def last_complete_us_session_date(now: datetime | None = None) -> date:
@@ -463,7 +478,7 @@ def screen_split(
             norm_fail.append(sym)
             continue
         screened += 1
-        bar_dates.append(pd.Timestamp(ohlc.index[-1]).date())
+        bar_dates.append(session_bar_date(ohlc.index[-1]))
         if y:
             yellow.append(sym)
         if w:

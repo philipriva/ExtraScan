@@ -20,6 +20,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -34,13 +35,18 @@ from run_extrascan import (
     SYMBOL_RETRY_RETRIES,
     _extract_batch_frames,
     asof_et_str,
+    asof_session_str,
     drop_forming,
+    freshness_ok,
     hkt_now_str,
+    last_complete_us_session_date,
     ny_now,
     parse_symbols,
+    session_bar_date,
     universe_us_ex_etf_fund,
 )
 from sheets_writer import QQSCAN_HEADERS, _client, write_column
+from verify_meta import bar_distribution, write_verify_meta
 
 DEFAULT_SHEET_ID = "1FSOmey7ALHFuYXxZSgjZnjWA5zpmbiv48PWAJD_yYRk"
 TAB_QQ = "QQscan"
@@ -306,12 +312,20 @@ def filter_mcap(symbols: list[str]) -> list[str]:
     return sorted(ok)
 
 
-def screen(syms: list[str]) -> tuple[list[str], list[str], dict]:
-    """Return (weekly_L_hits, daily_M_hits, stats)."""
-    print(f"universe={len(syms)} asof={asof_et_str()} hkt={hkt_now_str()}", flush=True)
+def screen(syms: list[str]) -> tuple[list[str], list[str], dict, list]:
+    """Return (weekly_L_hits, daily_M_hits, stats, bar_dates)."""
+    target_session = last_complete_us_session_date()
+    print(
+        f"universe={len(syms)} target_session={target_session.isoformat()} "
+        f"asof_stamp={asof_session_str(target_session)} "
+        f"et={asof_et_str()} hkt={hkt_now_str()}",
+        flush=True,
+    )
     data = download(syms)
     cand_l: list[str] = []
     cand_m: list[str] = []
+    bar_dates: list = []
+    bar_by_ticker: dict[str, str] = {}
     stats = {
         "universe": len(syms),
         "downloaded": len(data),
@@ -320,6 +334,8 @@ def screen(syms: list[str]) -> tuple[list[str], list[str], dict]:
         "screened": 0,
         "cross_l": 0,
         "cross_m": 0,
+        "target_session": target_session.isoformat(),
+        "bar_by_ticker": bar_by_ticker,
     }
     for sym in syms:
         raw = data.get(sym)
@@ -333,6 +349,9 @@ def screen(syms: list[str]) -> tuple[list[str], list[str], dict]:
         if d is None or len(d) < MIN_DAILY_BARS:
             stats["norm_fail"] += 1
             continue
+        last_bar = session_bar_date(d.index[-1])
+        bar_dates.append(last_bar)
+        bar_by_ticker[sym] = last_bar.isoformat()
         if not daily_filters_ok(d):
             stats["filter_fail"] += 1
             continue
@@ -366,7 +385,7 @@ def screen(syms: list[str]) -> tuple[list[str], list[str], dict]:
     stats["L"] = len(hits_l)
     stats["M"] = len(hits_m)
     print(f"post-mcap L={len(hits_l)} M={len(hits_m)}", flush=True)
-    return hits_l, hits_m, stats
+    return hits_l, hits_m, stats, bar_dates
 
 
 def _looks_like_header(cell: str) -> bool:
@@ -454,25 +473,87 @@ def main(argv: Optional[list[str]] = None) -> int:
         syms = universe_us_ex_etf_fund()
         print(f"universe_us_ex_etf_fund n={len(syms)}", flush=True)
 
-    hits_l, hits_m, stats = screen(syms)
-    print("stats:", stats, flush=True)
+    hits_l, hits_m, stats, bar_dates = screen(syms)
+    target_session = last_complete_us_session_date()
+    ok_fresh, fresh_info = freshness_ok(bar_dates, target_session)
+    dist = bar_distribution(bar_dates, target_session)
+    print(
+        f"freshness expected={target_session} fresh={fresh_info.get('fresh')}/"
+        f"{fresh_info.get('screened')} frac={fresh_info.get('frac')} ok={ok_fresh} "
+        f"bars={fresh_info.get('unique_last_bars')}",
+        flush=True,
+    )
+    # stats may include large bar_by_ticker — print compact view
+    compact = {k: v for k, v in stats.items() if k != "bar_by_ticker"}
+    print("stats:", compact, flush=True)
     print(f"L sample: {hits_l[:20]}", flush=True)
     print(f"M sample: {hits_m[:20]}", flush=True)
 
-    if args.dry_run:
-        print("dry-run OK (no Sheet write)", flush=True)
-        return 0
+    meta_path = Path("out/zhuli_verify.json")
+    sheets_info = {"attempted": False, "written": False, "skipped_reason": None}
+    status = "OK"
+    if not ok_fresh:
+        status = "FAIL_STALE"
+    elif len(hits_l) == 0 and len(hits_m) == 0:
+        status = "OK_NO_NEW_SIGNAL"
 
-    n_l = write_column(
-        sa, args.sheet_id, TAB_QQ, "L", hits_l, header=QQSCAN_HEADERS["L"]
+    exit_code = 0
+    if args.dry_run:
+        sheets_info["skipped_reason"] = "dry_run"
+        if status == "OK":
+            status = "DRY_RUN"
+        print("dry-run OK (no Sheet write)", flush=True)
+    elif not ok_fresh:
+        sheets_info["skipped_reason"] = "FAIL_STALE"
+        print(
+            "FRESHNESS FAIL: input bars are not the prior complete US session — "
+            "skip Sheets write.",
+            flush=True,
+        )
+        exit_code = 4
+    else:
+        sheets_info["attempted"] = True
+        n_l = write_column(
+            sa, args.sheet_id, TAB_QQ, "L", hits_l, header=QQSCAN_HEADERS["L"]
+        )
+        n_m = write_column(
+            sa, args.sheet_id, TAB_QQ, "M", hits_m, header=QQSCAN_HEADERS["M"]
+        )
+        if not args.skip_headers_refresh:
+            refresh_qqscan_headers_preserving(sa, args.sheet_id)
+        sheets_info["written"] = True
+        sheets_info["L"] = n_l
+        sheets_info["M"] = n_m
+        print(f"QQscan done L={n_l} M={n_m}", flush=True)
+
+    # Cap ticker map in artifact size
+    bar_by = stats.get("bar_by_ticker") or {}
+    if len(bar_by) > 500:
+        # keep distribution; sample keys only
+        sample = dict(list(bar_by.items())[:500])
+        bar_payload = {"sample": sample, "truncated": True, "total": len(bar_by)}
+    else:
+        bar_payload = bar_by
+
+    write_verify_meta(
+        meta_path,
+        {
+            "job": "zhuli_lm",
+            "status": status,
+            "target_session": target_session.isoformat(),
+            "input_bars": dist,
+            "bar_by_ticker": bar_payload,
+            "hits": {"L": len(hits_l), "M": len(hits_m)},
+            "sources": [{"kind": "yfinance_daily", "universe": "us_ex_etf_fund"}],
+            "sheets": sheets_info,
+            "notes": [
+                "OK_NO_NEW_SIGNAL = bars fresh but L=M=0 crosses.",
+                "FAIL_STALE = bars older than target_session; Sheet not written.",
+            ],
+        },
     )
-    n_m = write_column(
-        sa, args.sheet_id, TAB_QQ, "M", hits_m, header=QQSCAN_HEADERS["M"]
-    )
-    if not args.skip_headers_refresh:
-        refresh_qqscan_headers_preserving(sa, args.sheet_id)
-    print(f"QQscan done L={n_l} M={n_m}", flush=True)
-    return 0
+    print(f"wrote {meta_path} status={status}", flush=True)
+    return exit_code
 
 
 if __name__ == "__main__":
