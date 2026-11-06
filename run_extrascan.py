@@ -429,6 +429,8 @@ def screen_split(
     bar_dates: list[date] = []
     screened = 0
     short_history = 0
+    bar_by_ticker: dict[str, str] = {}
+    selected_non_target: dict[str, str] = {}
     signal_error = 0
     expected = last_complete_us_session_date()
     for sym in syms:
@@ -445,7 +447,9 @@ def screen_split(
             continue
         # Real last completed OHLC bar recorded BEFORE the lookback filter:
         # short history = actual fresh/stale bar evidence, ineligible for signals.
-        bar_dates.append(session_bar_date(ohlc.index[-1]))
+        _lb = session_bar_date(ohlc.index[-1])
+        bar_dates.append(_lb)
+        bar_by_ticker[sym] = _lb.isoformat()
         if len(ohlc) < MIN_BARS:
             short_history += 1
             continue
@@ -460,6 +464,8 @@ def screen_split(
             yellow.append(sym)
         if w:
             white.append(sym)
+        if (y or w) and _lb != expected:
+            selected_non_target[sym] = _lb.isoformat()
     yellow = sorted(set(yellow))
     white = sorted(set(white))
     missing_count = len(dl_failed) + len(set(norm_fail))
@@ -486,7 +492,13 @@ def screen_split(
         "white": len(white),
         "download_failed_symbols": sorted(dl_failed),
         "expected_session": expected.isoformat(),
-        "fresh_ok": ok_fresh,
+        # Per-selected guard: every written ticker's real last input bar must be
+        # the target session; universe fraction alone is not enough.
+        "fresh_ok": ok_fresh and not selected_non_target,
+        "universe_fresh_ok": ok_fresh,
+        "selected_non_target": selected_non_target,
+        "selected_bar_dates": {t: bar_by_ticker.get(t) for t in sorted(set(yellow) | set(white))},
+        "bar_by_ticker": bar_by_ticker,
         "fresh_info": fresh_info,
     }
     print(
@@ -687,8 +699,19 @@ def main() -> int:
                     "denom": fi.get("denom"),
                     "unique": fi.get("unique_last_bars"),
                     "expected": fi.get("expected"),
+                    "policy_version": fi.get("policy_version"),
+                    "universe_total": fi.get("universe_total"),
+                    "actual_complete_bar_count": fi.get("actual_complete_bar_count"),
+                    "stale_count": fi.get("stale_count"),
+                    "future_count": fi.get("future_count"),
+                    "signal_eligible": st.get("signal_eligible"),
+                    "short_history_ineligible": st.get("short_history_ineligible"),
                 },
-                "status": "OK" if st.get("fresh_ok") else "FAIL_STALE",
+                "selected_bar_dates": st.get("selected_bar_dates"),
+                "selected_non_target": st.get("selected_non_target"),
+                "bar_by_ticker": st.get("bar_by_ticker"),
+                "status": "OK" if st.get("fresh_ok") else (
+                    "FAIL_STALE" if not st.get("universe_fresh_ok") else "FAIL_SELECTED_NON_TARGET"),
             }
         )
     extrascan_status = "FAIL_STALE" if stale else "OK"
