@@ -226,7 +226,7 @@ def write_tabs(
         print(f"Sheets: write {title} n={len(rows)}", flush=True)
         _clear_and_write(ws, rows)
         if do_readback:
-            got = ws.get(f"A1:C{max(len(rows), 1)}") or []
+            got = [r for r in (ws.get(f"A1:C{max(len(rows), 1)}") or []) if any(str(c).strip() for c in r)]
             receipts[title] = {
                 "written_n": len(rows),
                 "readback_n": len(got),

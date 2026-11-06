@@ -498,11 +498,23 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"L sample: {hits_l[:20]}", flush=True)
     print(f"M sample: {hits_m[:20]}", flush=True)
 
+    bar_by_all = stats.get("bar_by_ticker") or {}
+    selected_non_target = {
+        t: bar_by_all.get(t) for t in sorted(set(hits_l) | set(hits_m))
+        if bar_by_all.get(t) != target_session.isoformat()
+    }
+    universe_fresh_ok = ok_fresh
+    if selected_non_target:
+        print(f"SELECTED NON-TARGET (refuse write): {selected_non_target}", flush=True)
+        ok_fresh = False
+
     meta_path = Path("out/zhuli_verify.json")
     sheets_info = {"attempted": False, "written": False, "skipped_reason": None}
     status = "OK"
-    if not ok_fresh:
+    if not universe_fresh_ok:
         status = "FAIL_STALE"
+    elif selected_non_target:
+        status = "FAIL_SELECTED_NON_TARGET"
     elif len(hits_l) == 0 and len(hits_m) == 0:
         status = "OK_NO_NEW_SIGNAL"
 
@@ -513,7 +525,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             status = "DRY_RUN"
         print("dry-run OK (no Sheet write)", flush=True)
     elif not ok_fresh:
-        sheets_info["skipped_reason"] = "FAIL_STALE"
+        sheets_info["skipped_reason"] = status
         print(
             "FRESHNESS FAIL: input bars are not the prior complete US session — "
             "skip Sheets write.",
@@ -548,20 +560,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         sheets_info["readback"] = {"L": rb_l, "M": rb_m}
         print(f"QQscan done L={n_l} M={n_m}", flush=True)
 
-    # Cap ticker map in artifact size
-    bar_by = stats.get("bar_by_ticker") or {}
-    if len(bar_by) > 500:
-        # keep distribution; sample keys only
-        sample = dict(list(bar_by.items())[:500])
-        bar_payload = {"sample": sample, "truncated": True, "total": len(bar_by)}
-    else:
-        bar_payload = bar_by
+    # Full per-ticker last-bar outcome (no truncation) so downstream can recompute.
+    bar_payload = stats.get("bar_by_ticker") or {}
 
     write_verify_meta(
         meta_path,
         {
             "job": "zhuli_lm",
             "status": status,
+            "policy_version": fresh_info.get("policy_version"),
+            "selected_bar_dates": {t: bar_payload.get(t) for t in sorted(set(hits_l) | set(hits_m))},
+            "selected_non_target": selected_non_target,
             "target_session": target_session.isoformat(),
             "input_bars": dist,
             "bar_by_ticker": bar_payload,
