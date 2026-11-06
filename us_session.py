@@ -138,45 +138,58 @@ def freshness_ok(
     min_frac: float = DEFAULT_MIN_FRESH_FRAC,
     *,
     missing_count: int = 0,
+    min_coverage: float = 0.85,
 ) -> tuple[bool, dict[str, Any]]:
-    """Require fresh/denom >= min_frac where denom includes missing tickers.
+    """Bar-freshness and coverage gates (fail-closed; does not lower 0.90).
 
-    missing_count = download failures + normalize failures + other tickers with
-    no usable last bar. Missing must not be excluded from the denominator
-    (that would inflate PASS). Threshold stays at the approved Daily default
-    (0.90) unless an explicit caller override is passed.
+    - bar_frac = fresh/screened must be >= min_frac (approved 0.90).
+      Missing tickers cannot inflate this ratio.
+    - coverage = screened/(screened+missing) must be >= min_coverage (default 0.85)
+      so a near-empty download cannot PASS just because the few bars look fresh.
+    - universe_frac = fresh/(screened+missing) is reported for audit only
+      (not the PASS gate — full Nasdaq directories always contain no-data symbols).
     """
     if missing_count < 0:
         raise ValueError("missing_count must be >= 0")
     screened = len(bar_dates)
     denom = screened + int(missing_count)
-    if denom == 0:
+    if screened == 0 or denom == 0:
         return False, {
             "screened": 0,
-            "missing_count": 0,
+            "missing_count": int(missing_count),
             "fresh": 0,
             "frac": 0.0,
-            "denom": 0,
+            "bar_frac": 0.0,
+            "coverage": 0.0,
+            "universe_frac": 0.0,
+            "denom": denom,
             "expected": expected.isoformat(),
             "unique_last_bars": [],
             "min_frac": min_frac,
+            "min_coverage": min_coverage,
         }
-    # Future bars relative to expected are not fresh (and signal unknown/bad clock).
     fresh = sum(1 for d in bar_dates if d == expected)
-    frac = fresh / denom
+    bar_frac = fresh / screened
+    coverage = screened / denom
+    universe_frac = fresh / denom
+    ok = (bar_frac >= min_frac) and (coverage >= min_coverage)
     info = {
         "screened": screened,
         "missing_count": int(missing_count),
         "fresh": fresh,
-        "frac": round(frac, 4),
+        "frac": round(bar_frac, 4),
+        "bar_frac": round(bar_frac, 4),
+        "coverage": round(coverage, 4),
+        "universe_frac": round(universe_frac, 4),
         "denom": denom,
         "expected": expected.isoformat(),
         "unique_last_bars": sorted({d.isoformat() for d in bar_dates}),
         "min_frac": min_frac,
+        "min_coverage": min_coverage,
         "future_count": sum(1 for d in bar_dates if d > expected),
         "stale_count": sum(1 for d in bar_dates if d < expected),
     }
-    return frac >= min_frac, info
+    return ok, info
 
 
 def asof_session_str(session: date | None = None) -> str:
