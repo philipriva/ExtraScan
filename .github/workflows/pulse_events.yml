@@ -59,5 +59,6 @@ jobs:
           path: |
             out/pulse_events.csv
             out/pulse_ff_state.csv
+            out/pulse_verify.json
           if-no-files-found: ignore
           retention-days: 14

@@ -44,12 +44,17 @@ from run_extrascan import (
     SYMBOL_RETRY_RETRIES,
     _extract_batch_frames,
     asof_et_str,
+    asof_session_str,
     drop_forming,
+    freshness_ok,
     fund_flow_flags,
     fund_flow_state,
     hkt_now_str,
+    last_complete_us_session_date,
     ny_now,
+    session_bar_date,
 )
+from verify_meta import bar_distribution, write_verify_meta
 from sheets_writer import _clear_and_write, _client, _ensure_worksheet
 from write_zhuli_lm import (
     MIN_WEEKLY_BARS,
@@ -97,10 +102,8 @@ def asof_date_str() -> str:
 
 
 def bar_date_str(idx) -> str:
-    ts = pd.Timestamp(idx)
-    if ts.tzinfo is not None:
-        ts = ts.tz_convert("America/New_York").tz_localize(None)
-    return ts.strftime("%Y-%m-%d")
+    """Session label date for a daily bar (not ET-converted UTC midnight)."""
+    return session_bar_date(idx).isoformat()
 
 
 def load_universe(path: Path) -> list[tuple[str, str]]:
@@ -359,7 +362,9 @@ def write_tab(
     tab: str,
     header: list[str],
     rows: list[list[str]],
-) -> None:
+    *,
+    do_readback: bool = False,
+) -> dict | None:
     gc = _client(sa_json)
     sh = gc.open_by_key(spreadsheet_id)
     ws = _ensure_worksheet(sh, tab)
@@ -369,6 +374,22 @@ def write_tab(
         ws.resize(rows=need)
     print(f"Sheets: overwrite {tab} data_rows={len(rows)}", flush=True)
     _clear_and_write(ws, body)
+    if not do_readback:
+        return None
+    got = ws.get(f"A1:Z{max(len(body), 1)}") or []
+    # data rows exclude header
+    data_n = max(0, len(got) - 1) if got else 0
+    receipt = {
+        "written_n": len(rows),
+        "readback_n": data_n,
+        "count_match": data_n == len(rows),
+        "readback_sample": got[:3],
+    }
+    print(
+        f"Sheets: readback {tab} n={data_n} count_match={receipt['count_match']}",
+        flush=True,
+    )
+    return receipt
 
 
 def maybe_refresh_universe_tab(
@@ -426,9 +447,12 @@ def main() -> int:
     univ = load_universe(args.universe)
     layer_of = {t: layer for t, layer in univ}
     syms = [t for t, _ in univ]
-    asof = asof_date_str()
+    target_session = last_complete_us_session_date()
+    # Sheet "asof" = target US session date (not wall-clock run day).
+    asof = target_session.isoformat()
     print(
-        f"pulse_events universe={len(syms)} asof={asof} "
+        f"pulse_events universe={len(syms)} target_session={asof} "
+        f"asof_stamp={asof_session_str(target_session)} "
         f"hkt={hkt_now_str()} et={asof_et_str()}",
         flush=True,
     )
@@ -436,6 +460,9 @@ def main() -> int:
     data = download(syms)
     events: list[list[str]] = []
     ff_rows: list[list[str]] = []
+    bar_dates: list = []
+    bar_by_ticker: dict[str, str] = {}
+    missing_syms: list[str] = []
     stats = {
         "universe": len(syms),
         "downloaded": len(data),
@@ -467,15 +494,21 @@ def main() -> int:
     for sym in syms:
         raw = data.get(sym)
         if raw is None:
+            missing_syms.append(sym)
             continue
         d = normalize_ohlc(raw)
         if d is None:
             stats["norm_fail"] += 1
+            missing_syms.append(sym)
             continue
         d = drop_forming(d)
         if d is None or len(d) < MIN_BARS:
             stats["norm_fail"] += 1
+            missing_syms.append(sym)
             continue
+        last_bar = session_bar_date(d.index[-1])
+        bar_dates.append(last_bar)
+        bar_by_ticker[sym] = last_bar.isoformat()
         stats["screened"] += 1
         rows = screen_symbol(
             sym, d, asof, spy=spy_df, breadth_ok=breadth_ok
@@ -492,6 +525,18 @@ def main() -> int:
 
     events.sort(key=lambda r: (r[2], r[1]))
     ff_rows.sort(key=lambda r: r[1])
+
+    missing_n = len(missing_syms)
+    ok_fresh, fresh_info = freshness_ok(
+        bar_dates, target_session, missing_count=missing_n
+    )
+    dist = bar_distribution(bar_dates, target_session, missing_count=missing_n)
+    print(
+        f"freshness expected={target_session} fresh={fresh_info.get('fresh')}/"
+        f"{fresh_info.get('screened')} frac={fresh_info.get('frac')} ok={ok_fresh} "
+        f"bars={fresh_info.get('unique_last_bars')}",
+        flush=True,
+    )
 
     args.out_csv.parent.mkdir(parents=True, exist_ok=True)
     with args.out_csv.open("w", newline="", encoding="utf-8") as f:
@@ -512,20 +557,70 @@ def main() -> int:
         w.writerows(ff_rows)
     print(f"wrote {args.out_ff_csv} rows={len(ff_rows)}", flush=True)
 
-    sa = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-    if args.dry_run:
-        print("Sheets: dry-run skip", flush=True)
-        return 0
-    if not sa:
-        print("Sheets: skip (no GOOGLE_SERVICE_ACCOUNT_JSON)", flush=True)
-        return 0
+    meta_path = args.out_csv.parent / "pulse_verify.json"
+    sheets_info = {"attempted": False, "written": False, "skipped_reason": None}
+    status = "OK"
+    if not ok_fresh:
+        status = "FAIL_STALE"
+    elif len(events) == 0:
+        status = "OK_NO_NEW_SIGNAL"
 
-    write_tab(sa, args.sheet_id, TAB_EVENTS, HEADER, events)
-    write_tab(sa, args.sheet_id, TAB_FF_STATE, FF_STATE_HEADER, ff_rows)
-    if args.refresh_universe:
-        maybe_refresh_universe_tab(sa, args.sheet_id, univ, args.universe)
-    print("done", flush=True)
-    return 0
+    sa = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    exit_code = 0
+    if args.dry_run:
+        sheets_info["skipped_reason"] = "dry_run"
+        if status == "OK":
+            status = "DRY_RUN"
+        print("Sheets: dry-run skip", flush=True)
+    elif not ok_fresh:
+        sheets_info["skipped_reason"] = "FAIL_STALE"
+        print(
+            "FRESHNESS FAIL: input bars are not the prior complete US session — "
+            "skip Sheets write (distinguish from OK_NO_NEW_SIGNAL).",
+            flush=True,
+        )
+        exit_code = 4
+    elif not sa:
+        sheets_info["skipped_reason"] = "no_service_account"
+        print("Sheets: skip (no GOOGLE_SERVICE_ACCOUNT_JSON)", flush=True)
+    else:
+        sheets_info["attempted"] = True
+        rb_events = write_tab(
+            sa, args.sheet_id, TAB_EVENTS, HEADER, events, do_readback=True
+        )
+        rb_ff = write_tab(
+            sa, args.sheet_id, TAB_FF_STATE, FF_STATE_HEADER, ff_rows, do_readback=True
+        )
+        if args.refresh_universe:
+            maybe_refresh_universe_tab(sa, args.sheet_id, univ, args.universe)
+        sheets_info["written"] = True
+        sheets_info["readback"] = {"events": rb_events, "ff_state": rb_ff}
+        print("done", flush=True)
+
+    write_verify_meta(
+        meta_path,
+        {
+            "job": "pulse_events",
+            "status": status,
+            "target_session": target_session.isoformat(),
+            "input_bars": dist,
+            "bar_by_ticker": bar_by_ticker,
+            "missing_symbols": missing_syms[:200],
+            "event_rows": len(events),
+            "ff_state_rows": len(ff_rows),
+            "by_signal": stats["by_signal"],
+            "sources": [{"kind": "yfinance_daily", "universe": "pulse_universe.csv"}],
+            "sheets": sheets_info,
+            "notes": [
+                "signal_date is last input bar (or onset for pulse_bottom_5); "
+                "asof column is target_session, not wall-clock.",
+                "OK_NO_NEW_SIGNAL = bars fresh but zero trigger rows.",
+                "FAIL_STALE = bars older than target_session; Sheet not written.",
+            ],
+        },
+    )
+    print(f"wrote {meta_path} status={status}", flush=True)
+    return exit_code
 
 
 if __name__ == "__main__":
