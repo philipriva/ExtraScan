@@ -25,6 +25,34 @@ def meta_name_for_list_name(name: str) -> str:
     return name + ".meta.json" if name.endswith(".txt") else name + ".meta.json"
 
 
+EXPECTED_POLICY_VERSION = "fresh_over_universe_v1"
+APPROVED_MIN_FRAC = 0.90
+
+
+def check_input_bars_policy(ib: Any, source_kind: str) -> tuple[bool, str, str]:
+    """Recompute producer freshness from its own counts; never trust a bare fresh_ok.
+
+    Missing/legacy fields -> UNKNOWN (no write). Inconsistent / weaker policy -> REJECT.
+    """
+    if not isinstance(ib, dict) or ib.get("policy_version") is None:
+        return False, "UNKNOWN", f"{source_kind}: input_bars.policy_version missing (legacy sidecar)"
+    if ib.get("policy_version") != EXPECTED_POLICY_VERSION:
+        return False, "REJECT", f"{source_kind}: policy_version={ib.get('policy_version')} != {EXPECTED_POLICY_VERSION}"
+    try:
+        fresh = int(ib["fresh"]); total = int(ib["universe_total"]); bars = int(ib["actual_complete_bar_count"])
+        missing = int(ib["missing_count"]); stale = int(ib["stale_count"]); future = int(ib.get("future_count") or 0)
+        min_frac = float(ib["min_frac"])
+    except (KeyError, TypeError, ValueError):
+        return False, "UNKNOWN", f"{source_kind}: input_bars counts incomplete"
+    if min_frac < APPROVED_MIN_FRAC:
+        return False, "REJECT", f"{source_kind}: min_frac={min_frac} below approved {APPROVED_MIN_FRAC}"
+    if total <= 0 or bars + missing != total or fresh + stale + future != bars:
+        return False, "REJECT", f"{source_kind}: counts do not sum to universe (fresh={fresh} stale={stale} future={future} bars={bars} missing={missing} total={total})"
+    if fresh / total < APPROVED_MIN_FRAC:
+        return False, "REJECT", f"{source_kind}: fresh/universe={fresh}/{total} < {APPROVED_MIN_FRAC}"
+    return True, "VERIFIED", "ok"
+
+
 def verify_sidecar(
     *,
     meta: dict[str, Any],
@@ -68,6 +96,10 @@ def verify_sidecar(
         return "REJECT", [f"{source_kind}: producer status FAIL_STALE"]
     if status not in ("OK", "OK_NO_NEW_SIGNAL"):
         return "REJECT", [f"{source_kind}: producer status={status}"]
+
+    ok_ib, ib_status, ib_note = check_input_bars_policy(meta.get("input_bars"), source_kind)
+    if not ok_ib:
+        return ib_status, [ib_note]
 
     # selected last bars coverage
     sel = meta.get("selected_last_bars") or {}

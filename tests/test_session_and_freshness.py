@@ -535,7 +535,7 @@ class TestQqscanSidecarGate(unittest.TestCase):
             "status": status,
             "target_session": session,
             "payload": {"count": len(norm), "sha256": payload_hash(norm)},
-            "input_bars": {"fresh_ok": True, "frac": 1.0},
+            "input_bars": {"fresh_ok": True, "frac": 1.0, "policy_version": "fresh_over_universe_v1", "fresh": 10, "universe_total": 10, "actual_complete_bar_count": 10, "missing_count": 0, "stale_count": 0, "future_count": 0, "min_frac": 0.9},
             "selected_last_bars": {
                 "n": len(norm),
                 "all_match_target": True,

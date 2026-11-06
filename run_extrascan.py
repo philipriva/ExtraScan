@@ -315,7 +315,7 @@ def normalize_ohlc(df: pd.DataFrame) -> pd.DataFrame | None:
     ).dropna()
     if not isinstance(out.index, pd.DatetimeIndex):
         out.index = pd.to_datetime(out.index)
-    return out if len(out) >= MIN_BARS else None
+    return out if len(out) else None
 
 
 def _extract_batch_frames(raw: pd.DataFrame, batch: list[str]) -> dict[str, pd.DataFrame]:
@@ -428,6 +428,8 @@ def screen_split(
     norm_fail: list[str] = []
     bar_dates: list[date] = []
     screened = 0
+    short_history = 0
+    signal_error = 0
     expected = last_complete_us_session_date()
     for sym in syms:
         raw = data.get(sym)
@@ -438,17 +440,22 @@ def screen_split(
             norm_fail.append(sym)
             continue
         ohlc = drop_forming(ohlc)
-        if ohlc is None or len(ohlc) < MIN_BARS:
+        if ohlc is None or len(ohlc) == 0:
             norm_fail.append(sym)
+            continue
+        # Real last completed OHLC bar recorded BEFORE the lookback filter:
+        # short history = actual fresh/stale bar evidence, ineligible for signals.
+        bar_dates.append(session_bar_date(ohlc.index[-1]))
+        if len(ohlc) < MIN_BARS:
+            short_history += 1
             continue
         try:
             y, w = fund_flow_flags(ohlc)
         except Exception as exc:
             print(f"[skip] {sym}: {exc}", file=sys.stderr, flush=True)
-            norm_fail.append(sym)
+            signal_error += 1
             continue
         screened += 1
-        bar_dates.append(session_bar_date(ohlc.index[-1]))
         if y:
             yellow.append(sym)
         if w:
@@ -470,6 +477,10 @@ def screen_split(
         "download_failed": len(dl_failed),
         "normalize_failed": len(set(norm_fail)),
         "screened_ok": screened,
+        "actual_bar_count": len(bar_dates),
+        "signal_eligible": screened,
+        "short_history_ineligible": short_history,
+        "signal_error_ineligible": signal_error,
         "missing_count": missing_count,
         "yellow": len(yellow),
         "white": len(white),

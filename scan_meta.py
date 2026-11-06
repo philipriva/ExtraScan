@@ -119,6 +119,11 @@ def build_scan_meta(
             "unique": fresh_info.get("unique_last_bars"),
             "fresh_ok": ok_fresh,
             "min_frac": min_frac,
+            "policy_version": fresh_info.get("policy_version"),
+            "universe_total": fresh_info.get("universe_total"),
+            "actual_complete_bar_count": fresh_info.get("actual_complete_bar_count"),
+            "stale_count": fresh_info.get("stale_count"),
+            "future_count": fresh_info.get("future_count"),
         },
         "selected_last_bars": {
             "n": len(selected_dates),

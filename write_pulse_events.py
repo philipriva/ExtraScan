@@ -120,7 +120,7 @@ def load_universe(path: Path) -> list[tuple[str, str]]:
     return rows
 
 
-def normalize_ohlc(df: pd.DataFrame) -> pd.DataFrame | None:
+def normalize_ohlc(df: pd.DataFrame, min_bars: int = MIN_BARS) -> pd.DataFrame | None:
     cols = {str(c).lower(): c for c in df.columns}
     need = ("open", "high", "low", "close")
     if not all(k in cols for k in need):
@@ -141,7 +141,7 @@ def normalize_ohlc(df: pd.DataFrame) -> pd.DataFrame | None:
     out = out.dropna(subset=["Open", "High", "Low", "Close"])
     if not isinstance(out.index, pd.DatetimeIndex):
         out.index = pd.to_datetime(out.index)
-    return out if len(out) >= MIN_BARS else None
+    return out if len(out) >= max(1, min_bars) else None
 
 
 def _yf_download_once(tickers: list[str]):
@@ -496,19 +496,24 @@ def main() -> int:
         if raw is None:
             missing_syms.append(sym)
             continue
-        d = normalize_ohlc(raw)
+        d = normalize_ohlc(raw, min_bars=1)
         if d is None:
             stats["norm_fail"] += 1
             missing_syms.append(sym)
             continue
         d = drop_forming(d)
-        if d is None or len(d) < MIN_BARS:
+        if d is None or len(d) == 0:
             stats["norm_fail"] += 1
             missing_syms.append(sym)
             continue
+        # Real last completed bar recorded BEFORE the lookback filter:
+        # short history = actual bar evidence, ineligible for signals.
         last_bar = session_bar_date(d.index[-1])
         bar_dates.append(last_bar)
         bar_by_ticker[sym] = last_bar.isoformat()
+        if len(d) < MIN_BARS:
+            stats["short_history"] = stats.get("short_history", 0) + 1
+            continue
         stats["screened"] += 1
         rows = screen_symbol(
             sym, d, asof, spy=spy_df, breadth_ok=breadth_ok
