@@ -50,3 +50,14 @@ class FfStateReference(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SelectedFuture(unittest.TestCase):
+    def test_selected_future_bar_refuses(self):
+        import test_selected_bar_guard as g
+        bar_by = {f"T{i}": g.EXP.isoformat() for i in range(99)}
+        bar_by["FUT"] = "2026-11-06"
+        rc, writes, meta = g.zhuli_main(["FUT"], [], bar_by, [g.EXP] * 99 + [date(2026, 11, 6)])
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(writes, [])
+        self.assertEqual(meta["selected_non_target"], {"FUT": "2026-11-06"})
