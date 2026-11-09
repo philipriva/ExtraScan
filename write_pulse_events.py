@@ -334,6 +334,21 @@ def screen_symbol(
     return rows
 
 
+
+def ff_state_reference_status(ff_ref_bar: dict, target_session) -> dict:
+    """Sidecar-only reference input status for ff_state rows (not a write gate)."""
+    tgt = target_session.isoformat()
+    non_target = {t: d for t, d in sorted(ff_ref_bar.items()) if d != tgt}
+    return {
+        "target_session": tgt,
+        "rows": len(ff_ref_bar),
+        "target_bar_n": len(ff_ref_bar) - len(non_target),
+        "non_target_n": len(non_target),
+        "non_target": non_target,
+        "status": "ALL_TARGET" if not non_target else "REFERENCE_HAS_NON_TARGET",
+        "role": "reference_only_not_write_gate",
+    }
+
 def ff_state_row(sym: str, d: pd.DataFrame, asof: str, layer: str) -> list[str] | None:
     """One ff_state row for last settled bar, or None if FF state unavailable."""
     try:
@@ -464,6 +479,7 @@ def main() -> int:
     bar_by_ticker: dict[str, str] = {}
     missing_syms: list[str] = []
     selected_non_target: dict[str, str] = {}
+    ff_ref_bar: dict[str, str] = {}
     stats = {
         "universe": len(syms),
         "downloaded": len(data),
@@ -532,6 +548,7 @@ def main() -> int:
         if ff is not None:
             ff_rows.append(ff)
             stats["ff_state"] += 1
+            ff_ref_bar[sym] = last_bar.isoformat()
 
     events.sort(key=lambda r: (r[2], r[1]))
     ff_rows.sort(key=lambda r: r[1])
@@ -628,6 +645,9 @@ def main() -> int:
             "missing_symbols": missing_syms[:200],
             "event_rows": len(events),
             "ff_state_rows": len(ff_rows),
+            # Reference-only input status for ff_state rows (sidecar only; the
+            # Sheet ff_state tab keeps its 9 columns unchanged).
+            "ff_state_reference_inputs": ff_state_reference_status(ff_ref_bar, target_session),
             "by_signal": stats["by_signal"],
             "sources": [{"kind": "yfinance_daily", "universe": "pulse_universe.csv"}],
             "sheets": sheets_info,

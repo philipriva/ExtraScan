@@ -43,6 +43,23 @@ def _ensure_worksheet(sh, title: str, rows: int = 10000, cols: int = 26):
         return sh.add_worksheet(title=title, rows=rows, cols=cols)
 
 
+
+def normalize_readback_rows(raw: list[list[Any]]) -> list[list[Any]]:
+    """Readback normalization for count checks.
+
+    Allowed only: canonical empty (``[]`` / ``[[]]`` / all-blank rows) and
+    trimming of TRAILING all-blank rows (Sheets API omits them anyway).
+    Interior blank rows are kept so they are counted (never silently removed).
+    """
+    rows = [list(r) for r in (raw or [])]
+
+    def _blank(r: list[Any]) -> bool:
+        return not any(str(c).strip() for c in r)
+
+    while rows and _blank(rows[-1]):
+        rows.pop()
+    return rows
+
 def _clear_and_write(ws, rows: list[list[Any]]) -> None:
     ws.clear()
     if not rows:
@@ -221,23 +238,29 @@ def write_tabs(
     gc = _client(sa_json)
     sh = gc.open_by_key(spreadsheet_id)
     receipts: dict[str, Any] = {}
+    mismatched: list[str] = []
     for title, rows in tab_rows.items():
         ws = _ensure_worksheet(sh, title)
         print(f"Sheets: write {title} n={len(rows)}", flush=True)
         _clear_and_write(ws, rows)
         if do_readback:
-            got = [r for r in (ws.get(f"A1:C{max(len(rows), 1)}") or []) if any(str(c).strip() for c in r)]
+            got = normalize_readback_rows(ws.get(f"A1:C{max(len(rows), 1)}") or [])
             receipts[title] = {
                 "written_n": len(rows),
                 "readback_n": len(got),
                 "count_match": len(got) == len(rows),
                 "readback_sample": got[:3],
             }
+            if not receipts[title]["count_match"]:
+                mismatched.append(title)
             print(
                 f"Sheets: readback {title} n={len(got)} "
                 f"count_match={receipts[title]['count_match']}",
                 flush=True,
             )
         time.sleep(0.5)
+    if mismatched:
+        # Fail closed: readback must equal what was written (interior blank rows count).
+        raise RuntimeError(f"Sheets readback count mismatch: {mismatched} receipts={receipts}")
     print("Sheets: done", flush=True)
     return receipts if do_readback else None
