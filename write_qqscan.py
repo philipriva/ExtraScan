@@ -185,9 +185,29 @@ def _fetch_symbols(download_url: str) -> list[str]:
     return [ln.strip() for ln in r.text.splitlines() if ln.strip()]
 
 
+META_BRANCH = "scan-meta"
+
+
 def _fetch_meta(list_name: str, list_url: str, owner_repo: str) -> dict[str, Any] | None:
-    """Try raw sidecar next to list; return None if missing."""
+    """Fetch the sidecar; return None if missing (caller treats as UNKNOWN → fail closed).
+
+    Producers publish sidecars to the ``scan-meta`` branch (main keeps one list
+    file per day). Legacy location next to the list on main is still tried.
+    The sidecar is only trusted after verify_sidecar binds it to the list hash.
+    """
+    mname = meta_name_for_list_name(list_name)
+    api = f"https://api.github.com/repos/{owner_repo}/contents/{mname}?ref={META_BRANCH}"
+    try:
+        h = dict(_headers())
+        h["Accept"] = "application/vnd.github.raw+json"
+        r = requests.get(api, headers=h, timeout=30)
+        if r.status_code != 404:
+            r.raise_for_status()
+            return json.loads(r.text)
+    except Exception as exc:
+        print(f"sidecar fetch miss {api}: {exc}", flush=True)
     candidates = [
+        f"https://raw.githubusercontent.com/{owner_repo}/{META_BRANCH}/{mname}",
         meta_url_for_list_url(list_url),
         f"https://raw.githubusercontent.com/{owner_repo}/main/{meta_name_for_list_name(list_name)}",
     ]
