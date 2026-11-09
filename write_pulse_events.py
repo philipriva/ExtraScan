@@ -334,6 +334,21 @@ def screen_symbol(
     return rows
 
 
+
+def ff_state_reference_status(ff_ref_bar: dict, target_session) -> dict:
+    """Sidecar-only reference input status for ff_state rows (not a write gate)."""
+    tgt = target_session.isoformat()
+    non_target = {t: d for t, d in sorted(ff_ref_bar.items()) if d != tgt}
+    return {
+        "target_session": tgt,
+        "rows": len(ff_ref_bar),
+        "target_bar_n": len(ff_ref_bar) - len(non_target),
+        "non_target_n": len(non_target),
+        "non_target": non_target,
+        "status": "ALL_TARGET" if not non_target else "REFERENCE_HAS_NON_TARGET",
+        "role": "reference_only_not_write_gate",
+    }
+
 def ff_state_row(sym: str, d: pd.DataFrame, asof: str, layer: str) -> list[str] | None:
     """One ff_state row for last settled bar, or None if FF state unavailable."""
     try:
@@ -463,6 +478,8 @@ def main() -> int:
     bar_dates: list = []
     bar_by_ticker: dict[str, str] = {}
     missing_syms: list[str] = []
+    selected_non_target: dict[str, str] = {}
+    ff_ref_bar: dict[str, str] = {}
     stats = {
         "universe": len(syms),
         "downloaded": len(data),
@@ -518,6 +535,10 @@ def main() -> int:
         rows = screen_symbol(
             sym, d, asof, spy=spy_df, breadth_ok=breadth_ok
         )
+        if rows and last_bar != target_session:
+            # New event rows require a target-session input bar (signal_date may be
+            # earlier for onset/weekly labels; the INPUT bar is what is checked).
+            selected_non_target[sym] = last_bar.isoformat()
         for row in rows:
             sig = row[2]
             stats["by_signal"][sig] = stats["by_signal"].get(sig, 0) + 1
@@ -527,6 +548,7 @@ def main() -> int:
         if ff is not None:
             ff_rows.append(ff)
             stats["ff_state"] += 1
+            ff_ref_bar[sym] = last_bar.isoformat()
 
     events.sort(key=lambda r: (r[2], r[1]))
     ff_rows.sort(key=lambda r: r[1])
@@ -564,9 +586,15 @@ def main() -> int:
 
     meta_path = args.out_csv.parent / "pulse_verify.json"
     sheets_info = {"attempted": False, "written": False, "skipped_reason": None}
+    universe_fresh_ok = ok_fresh
+    if selected_non_target:
+        print(f"SELECTED NON-TARGET events (refuse write): {selected_non_target}", flush=True)
+        ok_fresh = False
     status = "OK"
-    if not ok_fresh:
+    if not universe_fresh_ok:
         status = "FAIL_STALE"
+    elif selected_non_target:
+        status = "FAIL_SELECTED_NON_TARGET"
     elif len(events) == 0:
         status = "OK_NO_NEW_SIGNAL"
 
@@ -578,7 +606,7 @@ def main() -> int:
             status = "DRY_RUN"
         print("Sheets: dry-run skip", flush=True)
     elif not ok_fresh:
-        sheets_info["skipped_reason"] = "FAIL_STALE"
+        sheets_info["skipped_reason"] = status
         print(
             "FRESHNESS FAIL: input bars are not the prior complete US session — "
             "skip Sheets write (distinguish from OK_NO_NEW_SIGNAL).",
@@ -610,9 +638,16 @@ def main() -> int:
             "target_session": target_session.isoformat(),
             "input_bars": dist,
             "bar_by_ticker": bar_by_ticker,
+            "selected_non_target": selected_non_target,
+            "policy_version": fresh_info.get("policy_version"),
+            "universe_total": fresh_info.get("universe_total"),
+            "actual_complete_bar_count": fresh_info.get("actual_complete_bar_count"),
             "missing_symbols": missing_syms[:200],
             "event_rows": len(events),
             "ff_state_rows": len(ff_rows),
+            # Reference-only input status for ff_state rows (sidecar only; the
+            # Sheet ff_state tab keeps its 9 columns unchanged).
+            "ff_state_reference_inputs": ff_state_reference_status(ff_ref_bar, target_session),
             "by_signal": stats["by_signal"],
             "sources": [{"kind": "yfinance_daily", "universe": "pulse_universe.csv"}],
             "sheets": sheets_info,
