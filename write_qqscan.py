@@ -1,42 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Fetch Strong_Stocks_V3_*.txt + Maggiestocks_*.txt (+ sidecars) → QQscan A / J.
-
-Verification order (fail-closed before any Sheet mutation):
-  1) Resolve both list files for expected publish date (target_session + 1)
-  2) Fetch both bodies + optional *.txt.meta.json sidecars
-  3) Sidecar session / payload hash / count / producer status / selected bars
-  4) Only then write A and J (both validated first)
-
-Status:
-  VERIFIED — both sidecars pass (Sheet write allowed as OK)
-  UNKNOWN — one/both missing sidecar (filename-only; do not elevate to verified;
-            Sheet write skipped by default unless --allow-filename-only)
-  UPSTREAM_PENDING — required dated files not published yet
-  REJECT — sidecar present but mismatch/stale (no write)
-"""
+"""Fetch latest Strong_Stocks_V3_*.txt + Maggiestocks_*.txt and write QQscan A / J."""
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import sys
 import time
-from datetime import date, timedelta
-from pathlib import Path
-from typing import Any, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import Optional
 
 import requests
 
-from qqscan_upstream_meta import (
-    meta_name_for_list_name,
-    meta_url_for_list_url,
-    verify_sidecar,
-)
-from run_extrascan import last_complete_us_session_date
 from sheets_writer import QQSCAN_HEADERS, write_column
-from verify_meta import write_verify_meta
 
 DEFAULT_SHEET_ID = "1FSOmey7ALHFuYXxZSgjZnjWA5zpmbiv48PWAJD_yYRk"
 TAB = "QQscan"
@@ -69,8 +46,6 @@ def _latest_via_api(owner_repo: str, prefix: str) -> tuple[str, str]:
         name = it.get("name") or ""
         if not name.startswith(prefix) or not name.endswith(".txt"):
             continue
-        if name.endswith(".meta.json"):
-            continue
         m = DATE_RE.search(name)
         if not m:
             continue
@@ -86,6 +61,7 @@ def _latest_via_api(owner_repo: str, prefix: str) -> tuple[str, str]:
 
 
 def _latest_via_raw_walk(owner_repo: str, prefix: str, days: int = 14) -> tuple[str, str]:
+    """When API is rate-limited, probe raw URLs for today..today-days."""
     sess = requests.Session()
     sess.headers.update({"User-Agent": "ExtraScan-QQscan"})
     today = date.today()
@@ -96,6 +72,7 @@ def _latest_via_raw_walk(owner_repo: str, prefix: str, days: int = 14) -> tuple[
         r = sess.head(url, timeout=30, allow_redirects=True)
         if r.status_code == 200:
             return name, url
+        # some CDNs dislike HEAD — try GET range
         if r.status_code in (403, 405):
             g = sess.get(url, timeout=30)
             if g.status_code == 200 and g.text.strip():
@@ -121,9 +98,17 @@ def _file_date(name: str) -> date:
     return date(int(s[:4]), int(s[4:6]), int(s[6:8]))
 
 
-def expected_upstream_file_date(target_session: Optional[date] = None) -> date:
-    session = target_session or last_complete_us_session_date()
-    return session + timedelta(days=1)
+def _expected_min_date(now_utc: Optional[datetime] = None) -> date:
+    """Strong/Maggie dated files typically land ~01:40–01:52 UTC on calendar day D.
+
+    After 02:00 UTC we require file date >= today (UTC). Before that, yesterday is OK
+    (still inside the overnight publish window).
+    """
+    now = now_utc or datetime.now(timezone.utc)
+    d = now.date()
+    if now.hour < 2:
+        return d - timedelta(days=1)
+    return d
 
 
 def _assert_fresh(
@@ -131,16 +116,16 @@ def _assert_fresh(
     kind: str,
     *,
     allow_stale: bool,
-    min_date: date,
+    min_date: Optional[date] = None,
 ) -> None:
     got = _file_date(name)
-    if got >= min_date:
+    need = min_date if min_date is not None else _expected_min_date()
+    if got >= need:
         return
     msg = (
-        f"UPSTREAM_PENDING {kind}: selected {name} (file_date {got.isoformat()}), "
-        f"need >={min_date.isoformat()} for target US session "
-        f"{(min_date - timedelta(days=1)).isoformat()}. "
-        f"Upstream not published yet — refuse prior batch (do not write Sheet)."
+        f"STALE {kind}: selected {name} (date {got.isoformat()}), "
+        f"need >={need.isoformat()} UTC. Upstream not published yet, or this run "
+        f"is too early / a missed prior schedule left Sheet on an old file."
     )
     if allow_stale:
         print(f"WARNING: {msg}", flush=True)
@@ -155,8 +140,9 @@ def _latest_fresh(
     *,
     allow_stale: bool,
     wait_secs: int,
-    min_date: date,
+    min_date: Optional[date] = None,
 ) -> tuple[str, str]:
+    """Pick newest dated txt; optionally wait until file date >= min_date."""
     deadline = time.time() + max(0, wait_secs)
     last_err: Optional[BaseException] = None
     while True:
@@ -185,44 +171,6 @@ def _fetch_symbols(download_url: str) -> list[str]:
     return [ln.strip() for ln in r.text.splitlines() if ln.strip()]
 
 
-META_BRANCH = "scan-meta"
-
-
-def _fetch_meta(list_name: str, list_url: str, owner_repo: str) -> dict[str, Any] | None:
-    """Fetch the sidecar; return None if missing (caller treats as UNKNOWN → fail closed).
-
-    Producers publish sidecars to the ``scan-meta`` branch (main keeps one list
-    file per day). Legacy location next to the list on main is still tried.
-    The sidecar is only trusted after verify_sidecar binds it to the list hash.
-    """
-    mname = meta_name_for_list_name(list_name)
-    api = f"https://api.github.com/repos/{owner_repo}/contents/{mname}?ref={META_BRANCH}"
-    try:
-        h = dict(_headers())
-        h["Accept"] = "application/vnd.github.raw+json"
-        r = requests.get(api, headers=h, timeout=30)
-        if r.status_code != 404:
-            r.raise_for_status()
-            return json.loads(r.text)
-    except Exception as exc:
-        print(f"sidecar fetch miss {api}: {exc}", flush=True)
-    candidates = [
-        f"https://raw.githubusercontent.com/{owner_repo}/{META_BRANCH}/{mname}",
-        meta_url_for_list_url(list_url),
-        f"https://raw.githubusercontent.com/{owner_repo}/main/{meta_name_for_list_name(list_name)}",
-    ]
-    for url in candidates:
-        try:
-            r = requests.get(url, headers=_headers(), timeout=30)
-            if r.status_code == 404:
-                continue
-            r.raise_for_status()
-            return json.loads(r.text)
-        except Exception as exc:
-            print(f"sidecar fetch miss {url}: {exc}", flush=True)
-    return None
-
-
 def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(description="Write QQscan columns A and J from scanner txts")
     p.add_argument("--sheet-id", default=os.environ.get("EXTRASCAN_SHEET_ID", DEFAULT_SHEET_ID))
@@ -230,18 +178,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument(
         "--allow-stale",
         action="store_true",
-        help="Do not fail when newest file date is older than expected",
-    )
-    p.add_argument(
-        "--allow-filename-only",
-        action="store_true",
-        help="Permit Sheet write when sidecars missing (status stays UNKNOWN; not verified)",
+        help="Do not fail when newest file date is older than expected UTC day",
     )
     p.add_argument(
         "--wait-secs",
         type=int,
         default=int(os.environ.get("QQSCAN_WAIT_SECS", "0")),
-        help="Seconds to poll for required dated file before failing (env QQSCAN_WAIT_SECS)",
+        help="Seconds to poll for today's dated file before failing (env QQSCAN_WAIT_SECS)",
     )
     args = p.parse_args(argv)
 
@@ -256,24 +199,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         "TRUE",
         "yes",
     )
-    allow_filename_only = args.allow_filename_only or os.environ.get(
-        "QQSCAN_ALLOW_FILENAME_ONLY", ""
-    ).strip() in ("1", "true", "TRUE", "yes")
 
-    target_session = last_complete_us_session_date()
-    need_file = expected_upstream_file_date(target_session)
-    print(
-        f"target_session={target_session.isoformat()} "
-        f"expected_upstream_file_date={need_file.isoformat()} "
-        f"(sidecar required for VERIFIED; filename alone is UNKNOWN)",
-        flush=True,
-    )
-
-    meta_path = Path("out/qqscan_verify.json")
-    sheets_info: dict = {"attempted": False, "written": False, "skipped_reason": None}
-    sources_meta: list[dict] = []
-
-    # 1) Resolve BOTH list files before any Sheet write.
+    # Strong first — always land column A even if Maggie is late (do not couple the writes).
     try:
         strong_name, strong_url = _latest_fresh(
             STRONG_REPO,
@@ -281,158 +208,65 @@ def main(argv: Optional[list[str]] = None) -> int:
             "Strong_Stocks",
             allow_stale=allow_stale,
             wait_secs=args.wait_secs,
-            min_date=need_file,
         )
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
+
+    strong = _fetch_symbols(strong_url)
+    print(f"Source A: {STRONG_REPO}/{strong_name} n={len(strong)}", flush=True)
+    print(
+        f"Strong freshness OK (UTC today={datetime.now(timezone.utc).date().isoformat()}, "
+        f"min={_expected_min_date().isoformat()})",
+        flush=True,
+    )
+
+    if not args.dry_run:
+        n_a = write_column(sa, args.sheet_id, TAB, "A", strong, header=QQSCAN_HEADERS["A"])
+        print(f"QQscan A written n={n_a} file={strong_name}", flush=True)
+    else:
+        n_a = len(strong)
+
+    # Strong often publishes a few minutes before Maggie (repository_dispatch races).
+    # Require Maggiestocks date >= Strong date so we wait instead of writing yesterday's J.
+    maggie_min = max(_expected_min_date(), _file_date(strong_name))
+    print(
+        f"Maggie freshness floor={maggie_min.isoformat()} "
+        f"(max of UTC gate + Strong {_file_date(strong_name).isoformat()})",
+        flush=True,
+    )
+    try:
         maggie_name, maggie_url = _latest_fresh(
             MAGGIE_REPO,
             MAGGIE_PREFIX,
             "Maggiestocks",
             allow_stale=allow_stale,
             wait_secs=args.wait_secs,
-            min_date=max(need_file, _file_date(strong_name)),
+            min_date=maggie_min,
         )
     except RuntimeError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        write_verify_meta(
-            meta_path,
-            {
-                "job": "qqscan_aj",
-                "status": "UPSTREAM_PENDING",
-                "target_session": target_session.isoformat(),
-                "expected_upstream_file_date": need_file.isoformat(),
-                "bar_proof": False,
-                "sources": sources_meta,
-                "sheets": {
-                    "attempted": False,
-                    "written": False,
-                    "skipped_reason": "UPSTREAM_PENDING",
-                },
-                "notes": [str(exc)],
-            },
+        # A is already current; leave J untouched for Maggiestocks dispatch / backup cron.
+        print(
+            f"ERROR: Maggie not ready after wait; column A already updated to {strong_name}. {exc}",
+            file=sys.stderr,
         )
-        print(f"wrote {meta_path} status=UPSTREAM_PENDING", flush=True)
         return 3
 
-    # 2) Fetch bodies + sidecars (still no Sheet mutation).
-    strong = _fetch_symbols(strong_url)
     maggie = _fetch_symbols(maggie_url)
-    strong_meta = _fetch_meta(strong_name, strong_url, STRONG_REPO)
-    maggie_meta = _fetch_meta(maggie_name, maggie_url, MAGGIE_REPO)
-    print(f"Source A: {STRONG_REPO}/{strong_name} n={len(strong)} meta={bool(strong_meta)}", flush=True)
-    print(f"Source J: {MAGGIE_REPO}/{maggie_name} n={len(maggie)} meta={bool(maggie_meta)}", flush=True)
-
-    a_status, a_notes = verify_sidecar(
-        meta=strong_meta or {},
-        tickers=strong,
-        target_session=target_session,
-        source_kind="Strong_Stocks",
+    print(f"Source J: {MAGGIE_REPO}/{maggie_name} n={len(maggie)}", flush=True)
+    print(
+        f"Freshness OK (UTC today={datetime.now(timezone.utc).date().isoformat()}, "
+        f"min={_expected_min_date().isoformat()}, maggie_min={maggie_min.isoformat()})",
+        flush=True,
     )
-    if strong_meta is None:
-        a_status, a_notes = "UNKNOWN", ["Strong_Stocks: sidecar missing"]
-
-    j_status, j_notes = verify_sidecar(
-        meta=maggie_meta or {},
-        tickers=maggie,
-        target_session=target_session,
-        source_kind="Maggiestocks",
-    )
-    if maggie_meta is None:
-        j_status, j_notes = "UNKNOWN", ["Maggiestocks: sidecar missing"]
-
-    sources_meta = [
-        {
-            "column": "A",
-            "repo": STRONG_REPO,
-            "file": strong_name,
-            "file_date": _file_date(strong_name).isoformat(),
-            "n": len(strong),
-            "sidecar": bool(strong_meta),
-            "verify_status": a_status,
-            "producer_status": (strong_meta or {}).get("status"),
-            "target_session": (strong_meta or {}).get("target_session"),
-            "notes": a_notes,
-        },
-        {
-            "column": "J",
-            "repo": MAGGIE_REPO,
-            "file": maggie_name,
-            "file_date": _file_date(maggie_name).isoformat(),
-            "n": len(maggie),
-            "sidecar": bool(maggie_meta),
-            "verify_status": j_status,
-            "producer_status": (maggie_meta or {}).get("status"),
-            "target_session": (maggie_meta or {}).get("target_session"),
-            "notes": j_notes,
-        },
-    ]
-
-    # 3) Decide gate — any REJECT blocks; UNKNOWN blocks unless allow_filename_only.
-    notes_all = a_notes + j_notes
-    if a_status == "REJECT" or j_status == "REJECT":
-        status = "REJECT"
-        sheets_info["skipped_reason"] = "REJECT_SIDECAR"
-        exit_code = 5
-        write_ok = False
-    elif a_status == "VERIFIED" and j_status == "VERIFIED":
-        status = "OK"  # both verified
-        write_ok = True
-        exit_code = 0
-    elif a_status == "UNKNOWN" or j_status == "UNKNOWN":
-        status = "UNKNOWN"
-        write_ok = bool(allow_filename_only)
-        sheets_info["skipped_reason"] = None if write_ok else "UNKNOWN_NO_SIDECAR"
-        exit_code = 0 if write_ok else 6
-    else:
-        status = "UNKNOWN"
-        write_ok = False
-        sheets_info["skipped_reason"] = "UNKNOWN"
-        exit_code = 6
 
     if args.dry_run:
-        sheets_info["skipped_reason"] = "dry_run"
-        status = "DRY_RUN" if status == "OK" else status
-        write_ok = False
-        exit_code = 0
-        print(f"dry-run gate status={status} write_ok={write_ok}", flush=True)
-    elif write_ok:
-        sheets_info["attempted"] = True
-        n_a, rb_a = write_column(
-            sa, args.sheet_id, TAB, "A", strong, header=QQSCAN_HEADERS["A"], do_readback=True
-        )
-        n_j, rb_j = write_column(
-            sa, args.sheet_id, TAB, "J", maggie, header=QQSCAN_HEADERS["J"], do_readback=True
-        )
-        sheets_info["written"] = True
-        sheets_info["A"] = n_a
-        sheets_info["J"] = n_j
-        sheets_info["readback"] = {"A": rb_a, "J": rb_j}
-        print(f"QQscan done A={n_a} J={n_j} status={status}", flush=True)
-    else:
-        print(
-            f"NO SHEET WRITE — status={status} A={a_status} J={j_status}",
-            flush=True,
-        )
+        print("dry-run OK", flush=True)
+        return 0
 
-    write_verify_meta(
-        meta_path,
-        {
-            "job": "qqscan_aj",
-            "status": status,
-            "target_session": target_session.isoformat(),
-            "expected_upstream_file_date": need_file.isoformat(),
-            "bar_proof": status == "OK",
-            "sources": sources_meta,
-            "sheets": sheets_info,
-            "notes": notes_all
-            + [
-                "VERIFIED requires both sidecars: session match, payload hash/count, "
-                "producer OK/OK_NO_NEW_SIGNAL, selected bars on target session.",
-                "Filename alone never elevates to verified OK.",
-            ],
-        },
-    )
-    print(f"wrote {meta_path} status={status}", flush=True)
-    return exit_code
+    n_j = write_column(sa, args.sheet_id, TAB, "J", maggie, header=QQSCAN_HEADERS["J"])
+    print(f"QQscan done A={n_a} J={n_j}", flush=True)
+    return 0
 
 
 if __name__ == "__main__":

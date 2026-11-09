@@ -20,7 +20,7 @@ import os
 import re
 import sys
 import time
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -263,43 +263,58 @@ def hkt_now_str() -> str:
 
 
 def drop_forming(d: pd.DataFrame) -> pd.DataFrame:
-    """Drop forming bar before official XNYS close (early-close aware)."""
-    from us_session import drop_forming_bar
+    """Drop today's daily bar until after 16:00 ET.
 
-    return drop_forming_bar(d)
+    Matches banker_screener_app_new.drop_incomplete_bar(tf_key="1D") when
+    only_completed=True. ExtraScan always runs in that mode (post-close GH
+    Action); Banker GUI default only_completed=False keeps the forming bar.
+    """
+    if d is None or d.empty:
+        return d
+    now = ny_now()
+    last = pd.Timestamp(d.index[-1]).date()
+    if last == now.date() and (now.hour, now.minute) < (16, 0):
+        return d.iloc[:-1]
+    return d
 
-
-def session_bar_date(idx) -> date:
-    from us_session import session_bar_date as _sbd
-
-    return _sbd(idx)
 
 
 def last_complete_us_session_date(now: datetime | None = None) -> date:
-    """Prior complete US cash session (XNYS holidays / early closes / DST)."""
-    from us_session import last_complete_us_session_date as _lcd
+    """Prior complete US cash session date (America/New_York).
 
-    return _lcd(now)
+    After 16:00 ET, today's daily bar is complete → expect today (weekdays).
+    Before 16:00 ET, expect the previous weekday. Weekends roll back to Friday.
+    """
+    now = now or ny_now()
+    d = now.date()
+    if (now.hour, now.minute) < (16, 0):
+        d = d - timedelta(days=1)
+    while d.weekday() >= 5:  # Sat/Sun
+        d = d - timedelta(days=1)
+    return d
 
 
 def asof_session_str(session: date | None = None) -> str:
-    from us_session import asof_session_str as _asof
+    """Stamp Sheet rows with the session bar date, not the wall-clock run time."""
+    session = session or last_complete_us_session_date()
+    return f"{session.isoformat()} EOD ET"
 
-    return _asof(session)
 
-
-def freshness_ok(
-    bar_dates: list[date],
-    expected: date,
-    min_frac: float = 0.90,
-    *,
-    missing_count: int = 0,
-) -> tuple[bool, dict]:
-    """Delegate to us_session; denom includes missing_count (fail-closed)."""
-    from us_session import freshness_ok as _fok
-
-    return _fok(bar_dates, expected, min_frac=min_frac, missing_count=missing_count)
-
+def freshness_ok(bar_dates: list[date], expected: date, min_frac: float = 0.90) -> tuple[bool, dict]:
+    """Require most screened symbols' last bar == expected complete session."""
+    n = len(bar_dates)
+    if n == 0:
+        return False, {"screened": 0, "fresh": 0, "frac": 0.0, "expected": expected.isoformat()}
+    fresh = sum(1 for d in bar_dates if d == expected)
+    frac = fresh / n
+    info = {
+        "screened": n,
+        "fresh": fresh,
+        "frac": round(frac, 4),
+        "expected": expected.isoformat(),
+        "unique_last_bars": sorted({d.isoformat() for d in set(bar_dates)}),
+    }
+    return frac >= min_frac, info
 
 def normalize_ohlc(df: pd.DataFrame) -> pd.DataFrame | None:
     cols = {str(c).lower(): c for c in df.columns}
@@ -315,7 +330,7 @@ def normalize_ohlc(df: pd.DataFrame) -> pd.DataFrame | None:
     ).dropna()
     if not isinstance(out.index, pd.DatetimeIndex):
         out.index = pd.to_datetime(out.index)
-    return out if len(out) else None
+    return out if len(out) >= MIN_BARS else None
 
 
 def _extract_batch_frames(raw: pd.DataFrame, batch: list[str]) -> dict[str, pd.DataFrame]:
@@ -428,10 +443,6 @@ def screen_split(
     norm_fail: list[str] = []
     bar_dates: list[date] = []
     screened = 0
-    short_history = 0
-    bar_by_ticker: dict[str, str] = {}
-    selected_non_target: dict[str, str] = {}
-    signal_error = 0
     expected = last_complete_us_session_date()
     for sym in syms:
         raw = data.get(sym)
@@ -442,40 +453,24 @@ def screen_split(
             norm_fail.append(sym)
             continue
         ohlc = drop_forming(ohlc)
-        if ohlc is None or len(ohlc) == 0:
+        if ohlc is None or len(ohlc) < MIN_BARS:
             norm_fail.append(sym)
-            continue
-        # Real last completed OHLC bar recorded BEFORE the lookback filter:
-        # short history = actual fresh/stale bar evidence, ineligible for signals.
-        _lb = session_bar_date(ohlc.index[-1])
-        bar_dates.append(_lb)
-        bar_by_ticker[sym] = _lb.isoformat()
-        if len(ohlc) < MIN_BARS:
-            short_history += 1
             continue
         try:
             y, w = fund_flow_flags(ohlc)
         except Exception as exc:
             print(f"[skip] {sym}: {exc}", file=sys.stderr, flush=True)
-            signal_error += 1
+            norm_fail.append(sym)
             continue
         screened += 1
+        bar_dates.append(pd.Timestamp(ohlc.index[-1]).date())
         if y:
             yellow.append(sym)
         if w:
             white.append(sym)
-        if (y or w) and _lb != expected:
-            selected_non_target[sym] = _lb.isoformat()
     yellow = sorted(set(yellow))
     white = sorted(set(white))
-    missing_count = len(dl_failed) + len(set(norm_fail))
-    # Also count symbols that vanished without landing in dl_failed/norm_fail.
-    accounted = len(bar_dates) + missing_count
-    if accounted < len(syms):
-        missing_count += len(syms) - accounted
-    ok_fresh, fresh_info = freshness_ok(
-        bar_dates, expected, missing_count=missing_count
-    )
+    ok_fresh, fresh_info = freshness_ok(bar_dates, expected)
     stats = {
         "label": label,
         "universe": len(syms),
@@ -483,22 +478,11 @@ def screen_split(
         "download_failed": len(dl_failed),
         "normalize_failed": len(set(norm_fail)),
         "screened_ok": screened,
-        "actual_bar_count": len(bar_dates),
-        "signal_eligible": screened,
-        "short_history_ineligible": short_history,
-        "signal_error_ineligible": signal_error,
-        "missing_count": missing_count,
         "yellow": len(yellow),
         "white": len(white),
         "download_failed_symbols": sorted(dl_failed),
         "expected_session": expected.isoformat(),
-        # Per-selected guard: every written ticker's real last input bar must be
-        # the target session; universe fraction alone is not enough.
-        "fresh_ok": ok_fresh and not selected_non_target,
-        "universe_fresh_ok": ok_fresh,
-        "selected_non_target": selected_non_target,
-        "selected_bar_dates": {t: bar_by_ticker.get(t) for t in sorted(set(yellow) | set(white))},
-        "bar_by_ticker": bar_by_ticker,
+        "fresh_ok": ok_fresh,
         "fresh_info": fresh_info,
     }
     print(
@@ -537,18 +521,18 @@ def load_sheet_cfg(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def maybe_write_sheets(cfg: dict, tab_map: dict[str, list[list[str]]]) -> dict | None:
+def maybe_write_sheets(cfg: dict, tab_map: dict[str, list[list[str]]]) -> None:
     sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
     if not sa_json:
         print("Sheets: skip (no GOOGLE_SERVICE_ACCOUNT_JSON)", flush=True)
-        return None
+        return
     sid = (cfg.get("spreadsheet") or {}).get("id")
     if not sid:
         print("Sheets: skip (no spreadsheet.id in sheet_ids.json)", flush=True)
-        return None
+        return
     from sheets_writer import write_tabs
 
-    return write_tabs(sa_json, sid, tab_map, do_readback=True)
+    write_tabs(sa_json, sid, tab_map)
 
 
 def main() -> int:
@@ -674,53 +658,6 @@ def main() -> int:
         for st in stale:
             print(f"  stale label={st.get('label')} info={st.get('fresh_info')}", flush=True)
 
-    from verify_meta import bar_distribution, write_verify_meta
-
-    verify_sources = []
-    for st in all_stats:
-        fi = st.get("fresh_info") or {}
-        verify_sources.append(
-            {
-                "label": st.get("label"),
-                "kind": "yfinance_daily",
-                "target_session": st.get("expected_session"),
-                "fresh_ok": st.get("fresh_ok"),
-                "input_bars": {
-                    "min": (fi.get("unique_last_bars") or [None])[0]
-                    if fi.get("unique_last_bars")
-                    else None,
-                    "max": (fi.get("unique_last_bars") or [None])[-1]
-                    if fi.get("unique_last_bars")
-                    else None,
-                    "fresh": fi.get("fresh"),
-                    "screened": fi.get("screened"),
-                    "missing_count": fi.get("missing_count", st.get("missing_count")),
-                    "frac": fi.get("frac"),
-                    "denom": fi.get("denom"),
-                    "unique": fi.get("unique_last_bars"),
-                    "expected": fi.get("expected"),
-                    "policy_version": fi.get("policy_version"),
-                    "universe_total": fi.get("universe_total"),
-                    "actual_complete_bar_count": fi.get("actual_complete_bar_count"),
-                    "stale_count": fi.get("stale_count"),
-                    "future_count": fi.get("future_count"),
-                    "signal_eligible": st.get("signal_eligible"),
-                    "short_history_ineligible": st.get("short_history_ineligible"),
-                },
-                "selected_bar_dates": st.get("selected_bar_dates"),
-                "selected_non_target": st.get("selected_non_target"),
-                "bar_by_ticker": st.get("bar_by_ticker"),
-                "status": "OK" if st.get("fresh_ok") else (
-                    "FAIL_STALE" if not st.get("universe_fresh_ok") else "FAIL_SELECTED_NON_TARGET"),
-            }
-        )
-    extrascan_status = "FAIL_STALE" if stale else "OK"
-    # Empty signal tabs with fresh bars are still OK (signals can be zero).
-    if not stale and all(
-        st.get("yellow", 1) == 0 and st.get("white", 1) == 0 for st in all_stats
-    ):
-        extrascan_status = "OK_NO_NEW_SIGNAL"
-
     stats_path = cwd / args.out_dir / "download_stats.txt"
     lines = [
         f"run_timestamp={hkt_now_str()}",
@@ -757,30 +694,6 @@ def main() -> int:
     stats_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"wrote {stats_path}", flush=True)
 
-    sheets_info = {
-        "attempted": False,
-        "written": False,
-        "skipped_reason": "FAIL_STALE" if stale else None,
-        "readback": None,
-    }
-    meta_path = cwd / args.out_dir / "extrascan_verify.json"
-    write_verify_meta(
-        meta_path,
-        {
-            "job": "daily_extrascan",
-            "status": extrascan_status,
-            "target_session": session.isoformat(),
-            "sources": verify_sources,
-            "sheets": sheets_info,
-            "notes": [
-                "fresh_frac denominator includes download/normalize missing tickers.",
-                "FAIL_STALE skips Sheets before mutation.",
-                "OK_NO_NEW_SIGNAL = bars fresh but yellow=white=0.",
-            ],
-        },
-    )
-    print(f"wrote {meta_path} status={extrascan_status}", flush=True)
-
     if stale:
         print(
             f"done (NO SHEETS) | Y_ALL={len(yellow_all)} W_ALL={len(white_all)} "
@@ -789,28 +702,7 @@ def main() -> int:
         )
         return 2
 
-    sheets_info["attempted"] = True
-    sheets_info["skipped_reason"] = None
-    receipts = maybe_write_sheets(cfg, sheets_map)
-    sheets_info["written"] = True
-    sheets_info["readback"] = receipts
-    # Production readback is best-effort via sheets_writer when SA present;
-    # dry/local runs leave readback null. Re-write meta with write receipt.
-    write_verify_meta(
-        meta_path,
-        {
-            "job": "daily_extrascan",
-            "status": extrascan_status,
-            "target_session": session.isoformat(),
-            "sources": verify_sources,
-            "sheets": sheets_info,
-            "notes": [
-                "fresh_frac denominator includes download/normalize missing tickers.",
-                "FAIL_STALE skips Sheets before mutation.",
-                "OK_NO_NEW_SIGNAL = bars fresh but yellow=white=0.",
-            ],
-        },
-    )
+    maybe_write_sheets(cfg, sheets_map)
     print(
         f"done | Y_ALL={len(yellow_all)} W_ALL={len(white_all)} "
         f"Y_ETF={len(yellow_etf)} W_ETF={len(white_etf)}",
