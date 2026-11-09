@@ -45,6 +45,5 @@ jobs:
           name: zhuli_lm_log
           path: |
             *.log
-            out/zhuli_verify.json
           if-no-files-found: ignore
           retention-days: 7
