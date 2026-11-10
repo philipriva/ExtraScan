@@ -214,3 +214,58 @@ def test_e_write_path_applies_filters(monkeypatch):
     rc = m.main(["--columns", "E", "--symbols", "AAA,BBB"])
     assert rc == 0
     assert calls == [("QQscan", "E", ["AAA"])]
+
+
+# ---------- backup skip (schedule) ----------
+def test_session_close_utc_dst_and_standard():
+    assert m.session_close_utc(date(2026, 11, 9)).isoformat() == "2026-11-09T21:00:00+00:00"  # EST
+    assert m.session_close_utc(date(2026, 10, 30)).isoformat() == "2026-10-30T20:00:00+00:00"  # EDT
+
+
+def _run(i, ev="schedule", concl="success", ts="2026-11-09T22:05:00Z"):
+    return {"id": i, "event": ev, "conclusion": concl, "created_at": ts}
+
+
+def test_primary_already_wrote_rules():
+    exp = date(2026, 11, 9)
+    assert m.primary_already_wrote([_run(1)], exp)["id"] == 1
+    assert m.primary_already_wrote([_run(1, concl="failure")], exp) is None  # blocked/stale primary
+    assert m.primary_already_wrote([_run(1, ev="workflow_dispatch")], exp) is None  # may be dry-run
+    assert m.primary_already_wrote([_run(1, ts="2026-11-06T22:05:00Z")], exp) is None  # older session
+    assert m.primary_already_wrote([_run(7)], exp, current_run_id=7) is None  # itself
+
+
+def test_backup_skips_without_write(monkeypatch):
+    calls = []
+    monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_JSON", "{}")
+    monkeypatch.setattr(sheets_writer, "write_column", lambda *a, **k: calls.append(a) or 0)
+    monkeypatch.setattr(m, "last_complete_us_session_date", lambda: date(2026, 11, 9))
+    monkeypatch.setattr(m, "_fetch_workflow_runs", lambda: [_run(1)])
+    monkeypatch.setattr(m, "download", lambda syms: (_ for _ in ()).throw(AssertionError("no download")))
+    assert m.main(["--skip-if-primary-done"]) == 0 and calls == []
+
+
+def test_backup_runs_when_primary_missing(monkeypatch):
+    calls = []
+    monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_JSON", "{}")
+    monkeypatch.setattr(sheets_writer, "write_column", lambda sa, sid, tab, col, vals, header=None: calls.append(col) or len(vals))
+    exp = date(2026, 11, 9)
+    fresh = _frame([10, 10, 10, 10, 10, 11], start="2026-11-02")
+    monkeypatch.setattr(m, "last_complete_us_session_date", lambda: exp)
+    monkeypatch.setattr(m, "_fetch_workflow_runs", lambda: [_run(1, concl="failure")])
+    monkeypatch.setattr(m, "load_etf_list", lambda p: ["AAA"])
+    monkeypatch.setattr(m, "download", lambda syms: ({s: fresh for s in syms}, []))
+    assert m.main(["--skip-if-primary-done", "--columns", "C,D,F", "--skip-holdings"]) == 0
+    assert sorted(calls) == ["C", "D", "F"]
+
+
+def test_backup_api_error_runs_normally_but_stale_still_blocks(monkeypatch):
+    calls = []
+    monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_JSON", "{}")
+    monkeypatch.setattr(sheets_writer, "write_column", lambda *a, **k: calls.append(a) or 0)
+    monkeypatch.setattr(m, "last_complete_us_session_date", lambda: date(2026, 11, 9))
+    monkeypatch.setattr(m, "_fetch_workflow_runs", lambda: (_ for _ in ()).throw(RuntimeError("api down")))
+    stale = _frame([10, 10, 10, 10, 10, 11], start="2026-10-30")
+    monkeypatch.setattr(m, "parse_symbols", lambda t: ["AAA"])
+    monkeypatch.setattr(m, "download", lambda syms: ({s: stale for s in syms}, []))
+    assert m.main(["--skip-if-primary-done", "--columns", "E", "--symbols", "AAA"]) == 3 and calls == []
