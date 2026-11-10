@@ -1,0 +1,55 @@
+name: QQscan C D E F
+
+# C: TD賣出9 ETF ∪ holdings leaders   D: TD買入1 ETF ∪ holdings leaders
+# E: 全美股 ex-ETF/fund 日線主力做多上穿做空   F: 日線主力上穿 ETF ∪ holdings leaders
+# Writes ONLY QQscan C/D/E/F. Does not touch A/G/H/J/L/M or Fund Flow tabs.
+# Fail-closed: last bar must be last complete US session; fresh/universe >= .90.
+#
+# NEW WORKFLOW — needs Philip's authorization before merge.
+# Manual dispatch only. No schedule is active. Proposed schedule (NOT enabled):
+#   - cron: "0 22 * * 1-5"   # ≈ 06:00 HKT Tue–Sat, after US close settle
+#   - cron: "45 1 * * 2-6"   # backup ≈ 09:45 HKT
+on:
+  workflow_dispatch:
+    inputs:
+      columns:
+        description: "Subset of C,D,E,F"
+        default: "C,D,E,F"
+      dry_run:
+        description: "Compute only; do not write Sheet"
+        type: boolean
+        default: true
+
+concurrency:
+  group: qqscan-cdef
+  cancel-in-progress: false
+
+jobs:
+  cdef:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+      - name: Screen → QQscan C/D/E/F
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          EXTRA=()
+          if [ "${{ inputs.dry_run }}" = "true" ]; then EXTRA+=(--dry-run); fi
+          python write_qqscan_cdef.py --columns "${{ inputs.columns }}" --out-json cdef_result.json "${EXTRA[@]}"
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qqscan_cdef_result
+          path: cdef_result.json
+          if-no-files-found: ignore
+          retention-days: 14
