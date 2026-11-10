@@ -340,6 +340,54 @@ def scrape_leaders(etfs: list[str]) -> dict[str, list[str]]:
 
 
 # ---------------------------------------------------------------- main
+# ---------------------------------------------------------------- backup skip
+def session_close_utc(session: date) -> "datetime":
+    """16:00 America/New_York on ``session`` as an aware UTC datetime."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    return datetime(session.year, session.month, session.day, 16, 0, tzinfo=ZoneInfo("America/New_York")).astimezone(timezone.utc)
+
+
+def primary_already_wrote(runs: list[dict], expected: date, current_run_id: Optional[int] = None) -> Optional[dict]:
+    """Return the scheduled run that already wrote ``expected`` successfully, else None.
+
+    A scheduled run always writes (dry_run=false) and exits non-zero when any
+    column group is blocked (stale / <.90), so event=schedule + conclusion=success
+    + created after that session's 16:00 ET close == that session was written.
+    """
+    from datetime import datetime
+
+    cutoff = session_close_utc(expected)
+    for r in runs:
+        if current_run_id is not None and int(r.get("id", 0)) == int(current_run_id):
+            continue
+        if r.get("event") != "schedule" or r.get("conclusion") != "success":
+            continue
+        ts = r.get("created_at") or r.get("run_started_at") or ""
+        try:
+            created = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if created >= cutoff:
+            return r
+    return None
+
+
+def _fetch_workflow_runs() -> list[dict]:
+    import requests
+
+    repo = os.environ["GITHUB_REPOSITORY"]
+    token = os.environ.get("GITHUB_TOKEN", "")
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/qqscan_cdef.yml/runs"
+    headers = {"Accept": "application/vnd.github+json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    resp = requests.get(url, headers=headers, params={"per_page": 30, "event": "schedule"}, timeout=30)
+    resp.raise_for_status()
+    return resp.json().get("workflow_runs", [])
+
+
 def parse_cols(text: str) -> list[str]:
     cols = [c.strip().upper() for c in (text or "").replace("，", ",").split(",") if c.strip()]
     bad = [c for c in cols if c not in ALLOWED_COLS]
@@ -358,6 +406,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--skip-holdings", action="store_true", help="ETF columns = ETF tickers only")
     p.add_argument("--symbols", default="", help="Smoke list replacing the E universe")
     p.add_argument("--out-json", default="", help="Write full result JSON here")
+    p.add_argument(
+        "--skip-if-primary-done",
+        action="store_true",
+        help="Backup mode: exit 0 without writing if a scheduled run already wrote the expected session",
+    )
     args = p.parse_args(argv)
 
     cols = parse_cols(args.columns)
@@ -366,6 +419,22 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("ERROR: --asof is for dry-run only", file=sys.stderr)
         return 2
     expected = asof or last_complete_us_session_date()
+    if args.skip_if_primary_done:
+        try:
+            done = primary_already_wrote(
+                _fetch_workflow_runs(), expected, int(os.environ.get("GITHUB_RUN_ID", "0") or 0)
+            )
+        except Exception as exc:
+            # Cannot prove primary wrote → run normally (freshness guard still applies).
+            print(f"backup skip check failed ({exc}); running normally", flush=True)
+            done = None
+        if done is not None:
+            print(
+                f"SKIP: primary run {done.get('id')} already wrote session {expected} "
+                f"(created {done.get('created_at')}); no write",
+                flush=True,
+            )
+            return 0
     sa = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
     if not args.dry_run and not sa:
         print("ERROR: set GOOGLE_SERVICE_ACCOUNT_JSON to write", file=sys.stderr)

@@ -5,11 +5,16 @@ name: QQscan C D E F
 # Writes ONLY QQscan C/D/E/F. Does not touch A/G/H/J/L/M or Fund Flow tabs.
 # Fail-closed: last bar must be last complete US session; fresh/universe >= .90.
 #
-# NEW WORKFLOW — needs Philip's authorization before merge.
-# Manual dispatch only. No schedule is active. Proposed schedule (NOT enabled):
-#   - cron: "0 22 * * 1-5"   # ≈ 06:00 HKT Tue–Sat, after US close settle
-#   - cron: "45 1 * * 2-6"   # backup ≈ 09:45 HKT
+# Schedule approved by Philip 2026-11-10 (t328u). GitHub cron is UTC.
+#   Primary: 0 22 * * 1-5  ≈ 07:00 JST Tue–Sat (US close + 1–2h)
+#   Backup:  45 1 * * 2-6  ≈ 10:45 JST Tue–Sat — exits 0 with NO write if a
+#            scheduled run already succeeded for the same expected session.
+# Scheduled runs always write (dry_run=false). Freshness/.90 guard unchanged:
+# stale → that group is not written (old values kept), run fails (exit 3).
 on:
+  schedule:
+    - cron: "0 22 * * 1-5"
+    - cron: "45 1 * * 2-6"
   workflow_dispatch:
     inputs:
       columns:
@@ -19,6 +24,10 @@ on:
         description: "Compute only; do not write Sheet"
         type: boolean
         default: true
+
+permissions:
+  contents: read
+  actions: read
 
 concurrency:
   group: qqscan-cdef
@@ -40,11 +49,20 @@ jobs:
       - name: Screen → QQscan C/D/E/F
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           EXTRA=()
-          if [ "${{ inputs.dry_run }}" = "true" ]; then EXTRA+=(--dry-run); fi
-          python write_qqscan_cdef.py --columns "${{ inputs.columns }}" --out-json cdef_result.json "${EXTRA[@]}"
+          COLS="C,D,E,F"
+          echo "event=${{ github.event_name }} schedule='${{ github.event.schedule }}'"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            COLS="${{ inputs.columns }}"
+            if [ "${{ inputs.dry_run }}" = "true" ]; then EXTRA+=(--dry-run); fi
+          fi
+          if [ "${{ github.event.schedule }}" = "45 1 * * 2-6" ]; then
+            EXTRA+=(--skip-if-primary-done)
+          fi
+          python write_qqscan_cdef.py --columns "$COLS" --out-json cdef_result.json "${EXTRA[@]}"
       - name: Upload result
         if: always()
         uses: actions/upload-artifact@v4
