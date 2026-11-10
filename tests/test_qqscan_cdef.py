@@ -155,3 +155,62 @@ def test_stale_blocks_write(monkeypatch):
     monkeypatch.setattr(m, "download", lambda syms: ({s: stale for s in syms}, []))
     rc = m.main(["--columns", "E", "--symbols", "AAA,BBB"])
     assert rc == 3 and calls == []
+
+
+# ---------- Column E filters (Philip 2026-11-10) ----------
+def _rising(n=260, start=10.0, step=0.1, end="2026-11-09"):
+    idx = pd.bdate_range(end=end, periods=n)
+    return _frame([start + i * step for i in range(n)], start=idx[0])
+
+
+def test_e_price_filter_pass_and_reasons():
+    assert m.e_price_filter_reason(_rising(start=10)) is None
+    assert m.e_price_filter_reason(_rising(start=1, step=0.001)) == "close_le_5"
+    # long rise then sharp 3-bar drop: close < EMA9 but still > EMA200
+    up = [10 + i * 0.1 for i in range(257)] + [30, 29, 28]
+    assert m.e_price_filter_reason(_frame(up, start="2025-10-01")) == "close_le_ema9"
+    assert m.e_price_filter_reason(_rising(n=150)) == "bars_lt_200_for_ema200"
+    # long fall then a 5-bar bounce: > EMA9 but < EMA200
+    down = [60 - i * 0.15 for i in range(255)] + [22, 23, 24, 25, 26]
+    assert m.e_price_filter_reason(_frame(down, start="2025-10-01")) == "close_le_ema200"
+
+
+def test_e_no_volume_filter():
+    d = _rising(start=10)
+    d["Volume"] = 1.0  # tiny volume must not matter
+    assert m.e_price_filter_reason(d) is None
+
+
+def test_apply_e_filters_mcap_missing_excluded_and_counted():
+    good = _rising(start=10)
+    frames = {s: good for s in ("BIG", "SMALL", "NOCAP", "EDGE")}
+    frames["CHEAP"] = _rising(start=1, step=0.001)
+    caps = {"BIG": 5e9, "SMALL": 5e7, "NOCAP": None, "EDGE": 100_000_000.0}
+    kept, st = m.apply_e_filters(frames, ["BIG", "SMALL", "NOCAP", "EDGE", "CHEAP"], None, mcap_fn=caps.get)
+    assert kept == ["BIG"]
+    dc = st["dropped_counts"]
+    assert dc["mcap_missing"] == 1 and st["dropped"]["mcap_missing"] == ["NOCAP"]
+    assert dc["mcap_le_100m"] == 2  # SMALL and exactly-100M EDGE (strict >)
+    assert dc["close_le_5"] == 1
+    assert st["cross_hits"] == 5 and st["after_price_ema"] == 4 and st["kept"] == 1
+
+
+def test_e_mcap_only_queried_for_price_survivors():
+    asked = []
+    frames = {"A": _rising(start=10), "B": _rising(start=1, step=0.001)}
+    m.apply_e_filters(frames, ["A", "B"], None, mcap_fn=lambda s: asked.append(s) or 1e9)
+    assert asked == ["A"]
+
+
+def test_e_write_path_applies_filters(monkeypatch):
+    calls = []
+    monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_JSON", "{}")
+    monkeypatch.setattr(sheets_writer, "write_column", lambda sa, sid, tab, col, vals, header=None: calls.append((tab, col, list(vals))) or len(vals))
+    exp = date(2026, 11, 9)
+    monkeypatch.setattr(m, "last_complete_us_session_date", lambda: exp)
+    monkeypatch.setattr(m, "download", lambda syms: ({s: _rising() for s in syms}, []))
+    monkeypatch.setattr(m, "zhuli_daily_cross_up", lambda d: True)
+    monkeypatch.setattr(m, "fetch_mcap", lambda s: {"AAA": 2e9}.get(s))
+    rc = m.main(["--columns", "E", "--symbols", "AAA,BBB"])
+    assert rc == 0
+    assert calls == [("QQscan", "E", ["AAA"])]

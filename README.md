@@ -187,7 +187,7 @@ Sheets write is skipped (exit 2) unless ≥90% of screened symbols' last daily b
 |---|---|---|
 | C | etf_list.txt ETFs with **TD 賣出9** (S9 = RED count == 9, close < close[4]) ∪ holdings leaders | Philip TD mapping (SEA screener / us-exclude `td_setup_counts`) |
 | D | etf_list.txt ETFs with **TD 買入1** (B1 = GREEN count == 1, close > close[4]) ∪ holdings leaders | same |
-| E | All US stocks ex-ETF/fund (`universe_us_ex_etf_fund`) with daily 主力做多上穿做空, no extra filters | `write_zhuli_lm.zhuli_cross_up` |
+| E | All US stocks ex-ETF/fund (`universe_us_ex_etf_fund`) with daily 主力做多上穿做空, then mcap>100M (same source as M; missing→excluded+counted), close>$5, close>EMA9, close>EMA200; no volume filter | `write_zhuli_lm.zhuli_cross_up` |
 | F | etf_list.txt ETFs with daily 主力做多上穿做空 ∪ holdings leaders | same + `write_etf_leaders` (as column G) |
 
 - Writes only C/D/E/F; headers kept out of `QQSCAN_HEADERS` so existing writers never touch them.

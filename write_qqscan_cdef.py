@@ -7,7 +7,11 @@ C: etf_list.txt ETFs firing TD 賣出9 (Philip mapping S9 = RED count == 9,
 D: etf_list.txt ETFs firing TD 買入1 (Philip mapping B1 = GREEN count == 1,
    i.e. 1st close > close[4] after a non-green bar) ∪ their holdings leaders
 E: all US stocks ex-ETF/fund (universe_us_ex_etf_fund) with daily 主力做多
-   上穿 主力做空 on the last completed session (no holdings step)
+   上穿 主力做空 on the last completed session (no holdings step), then
+   Philip filters (2026-11-10): close > $5, close > daily EMA9,
+   close > daily EMA200, market cap > 100M USD (no volume filter).
+   Mcap source = same as QQscan M (yfinance fast_info.market_cap, then
+   info.marketCap); missing mcap → excluded and counted (never guessed).
 F: etf_list.txt ETFs with daily 主力做多 上穿 主力做空 ∪ their holdings leaders
 
 Definitions are reused, not re-invented:
@@ -54,12 +58,17 @@ MIN_FRESH_FRAC = 0.90
 # 主力能量 needs HHV/LLV36 + 1 prior bar for the cross; TD needs close[4].
 MIN_BARS_ZHULI = 38
 MIN_BARS_TD = 6
+# Column E filters (Philip 2026-11-10). No volume filter by request.
+E_MCAP_MIN = 100_000_000
+E_CLOSE_MIN = 5.0
+E_EMA_FAST = 9
+E_EMA_SLOW = 200
 
 # Kept separate from sheets_writer.QQSCAN_HEADERS on purpose (see docstring).
 QQSCAN_CDEF_HEADERS: dict[str, str] = {
     "C": "TD賣出9 ETF + holdings leaders",
     "D": "TD買入1 ETF + holdings leaders",
-    "E": "日線主力做多上穿做空 (全美股 ex-ETF/fund, 無額外篩選)",
+    "E": "日線主力做多上穿做空 (全美股 ex-ETF/fund; mcap>100M, >$5, >EMA9, >EMA200)",
     "F": "日線主力做多上穿做空 ETF + holdings leaders",
 }
 ALLOWED_COLS = tuple(QQSCAN_CDEF_HEADERS)
@@ -192,6 +201,108 @@ def evaluate(
     }
 
 
+def fetch_mcap(sym: str) -> Optional[float]:
+    """Market cap via the same source/order as write_zhuli_lm.market_cap_ok (M).
+
+    Returns None when unavailable (caller excludes + counts; never guessed).
+    """
+    import yfinance as yf
+
+    try:
+        t = yf.Ticker(sym)
+        cap = None
+        try:
+            fi = getattr(t, "fast_info", None)
+            if fi is not None:
+                cap = getattr(fi, "market_cap", None) or (
+                    fi.get("market_cap") if hasattr(fi, "get") else None
+                )
+        except Exception:
+            pass
+        if cap is None:
+            info = t.info or {}
+            cap = info.get("marketCap")
+        if cap is None:
+            return None
+        cap = float(cap)
+        return None if pd.isna(cap) else cap
+    except Exception:
+        return None
+
+
+def _ema_last(c: pd.Series, n: int) -> float:
+    # Same EMA style as write_zhuli_lm.daily_filters_ok (adjust=False, min_periods=n).
+    return float(c.ewm(span=n, adjust=False, min_periods=n).mean().iloc[-1])
+
+
+def e_price_filter_reason(d: pd.DataFrame) -> Optional[str]:
+    """None if passes price/EMA filters, else the first failing filter name."""
+    c = d["Close"].astype(float)
+    close = float(c.iloc[-1])
+    if pd.isna(close) or close <= E_CLOSE_MIN:
+        return "close_le_5"
+    e9 = _ema_last(c, E_EMA_FAST)
+    if pd.isna(e9) or close <= e9:
+        return "close_le_ema9"
+    if len(c) < E_EMA_SLOW:
+        return "bars_lt_200_for_ema200"
+    e200 = _ema_last(c, E_EMA_SLOW)
+    if pd.isna(e200) or close <= e200:
+        return "close_le_ema200"
+    return None
+
+
+def apply_e_filters(
+    frames: dict[str, pd.DataFrame],
+    cross_hits: list[str],
+    asof: Optional[date],
+    mcap_fn=None,
+    workers: int = 8,
+) -> tuple[list[str], dict]:
+    """Sequential funnel on cross hits: price/EMA filters, then mcap (only survivors)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    mcap_fn = mcap_fn or fetch_mcap
+    drops: dict[str, list[str]] = {
+        "close_le_5": [],
+        "close_le_ema9": [],
+        "bars_lt_200_for_ema200": [],
+        "close_le_ema200": [],
+        "mcap_missing": [],
+        "mcap_le_100m": [],
+    }
+    survivors: list[str] = []
+    for sym in cross_hits:
+        d = prepare_daily(frames.get(sym), asof)
+        reason = e_price_filter_reason(d)
+        if reason:
+            drops[reason].append(sym)
+        else:
+            survivors.append(sym)
+    caps: dict[str, Optional[float]] = {}
+    if survivors:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for sym, cap in zip(survivors, ex.map(mcap_fn, survivors)):
+                caps[sym] = cap
+    kept: list[str] = []
+    for sym in survivors:
+        cap = caps.get(sym)
+        if cap is None:
+            drops["mcap_missing"].append(sym)
+        elif cap <= E_MCAP_MIN:
+            drops["mcap_le_100m"].append(sym)
+        else:
+            kept.append(sym)
+    stats = {
+        "cross_hits": len(cross_hits),
+        "after_price_ema": len(survivors),
+        "kept": len(kept),
+        "dropped_counts": {k: len(v) for k, v in drops.items()},
+        "dropped": {k: sorted(v) for k, v in drops.items()},
+    }
+    return sorted(kept), stats
+
+
 def column_with_leaders(etfs: Iterable[str], leaders_by_etf: dict[str, list[str]]) -> list[str]:
     """Same shape as QQscan G: ETF tickers always ∪ their holdings leaders."""
     out: set[str] = set()
@@ -316,8 +427,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         if not ev["fresh_ok"]:
             blocked.append("E")
         else:
-            values["E"] = ev["hits"]["E"]
-            result["columns"]["E"] = {"n": len(values["E"]), "symbols": values["E"]}
+            kept, fstats = apply_e_filters(frames, ev["hits"]["E"], asof)
+            print(f"[US] E funnel {fstats['dropped_counts']} cross={fstats['cross_hits']} kept={fstats['kept']}", flush=True)
+            values["E"] = kept
+            result["columns"]["E"] = {
+                "n": len(kept),
+                "symbols": kept,
+                "cross_hits_unfiltered": ev["hits"]["E"],
+                "filters": fstats,
+            }
 
     for c in sorted(values):
         print(f"{c} n={len(values[c])} sample={values[c][:20]}", flush=True)
