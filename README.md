@@ -180,3 +180,17 @@ Formulas: Fund Flow = ExtraScan `fund_flow_state` (color green/blue/red/white_st
 White circle matches Philip's TradingView **ETF Heatmap (0-40) Bulletproof Logic** `signal_b2g` (prev blue → now green). Yellow banker entry no longer excludes white — a symbol can land in **both** `yellowETF` and `whiteETF` (TV: yellow bgcolor + ⚪ prefix).
 
 Sheets write is skipped (exit 2) unless ≥90% of screened symbols' last daily bar equals the prior complete US cash session. Cron ≈ 17:30 ET so Yahoo bars usually carry that session date.
+
+## QQscan C / D / E / F (write_qqscan_cdef.py) — additive, pending authorization
+
+| Col | Content | Source definition |
+|---|---|---|
+| C | etf_list.txt ETFs with **TD 賣出9** (S9 = RED count == 9, close < close[4]) ∪ holdings leaders | Philip TD mapping (SEA screener / us-exclude `td_setup_counts`) |
+| D | etf_list.txt ETFs with **TD 買入1** (B1 = GREEN count == 1, close > close[4]) ∪ holdings leaders | same |
+| E | All US stocks ex-ETF/fund (`universe_us_ex_etf_fund`) with daily 主力做多上穿做空, then mcap>100M (same source as M; missing→excluded+counted), close>$5, close>EMA9, close>EMA200; no volume filter | `write_zhuli_lm.zhuli_cross_up` |
+| F | etf_list.txt ETFs with daily 主力做多上穿做空 ∪ holdings leaders | same + `write_etf_leaders` (as column G) |
+
+- Writes only C/D/E/F; headers kept out of `QQSCAN_HEADERS` so existing writers never touch them.
+- Fail-closed: each selected symbol's last bar must be the last complete US session; fresh/universe ≥ 0.90 per group, else that group is not written (exit 3).
+- Dry run: `python write_qqscan_cdef.py --dry-run --asof 2026-11-09 --columns C,D,F`.
+- Workflow `qqscan_cdef.yml` is manual-dispatch only (default dry_run=true); proposed schedule is commented out pending authorization.
