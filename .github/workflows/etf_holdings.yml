@@ -1,0 +1,52 @@
+name: ETF Holdings
+
+# Full Schwab holdings per ETF (no filtering) -> artifact etf_holdings_out
+# (holdings.csv column-per-ETF, status.csv, holdings.json).
+# Standalone: no secrets, no Sheet writes, does not touch other workflows/tabs.
+# Manual dispatch ONLY (Philip has not chosen a schedule). Authorized 2026-11-11.
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Optional comma list of ETFs (default: etf_holdings/etf_list.txt)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: etf-holdings
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: |
+          pip install "playwright>=1.40.0"
+          playwright install --with-deps chromium
+      - name: Scrape Schwab holdings
+        env:
+          ONLY: ${{ github.event.inputs.only }}
+        run: python etf_holdings/scrape_etf_holdings.py --out out --only "$ONLY"
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f out/status.csv ]; then
+            { echo '```'; cat out/status.csv; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: etf_holdings_out
+          path: out/
+          if-no-files-found: warn
+          retention-days: 30
