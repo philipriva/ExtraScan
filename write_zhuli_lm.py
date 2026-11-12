@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
 
+from marketdata import download_daily, format_status, last_complete_us_session_date
 from run_extrascan import (
     BATCH,
     DOWNLOAD_BACKOFF_SEC,
@@ -246,23 +247,11 @@ def download_symbol_with_retry(sym: str) -> pd.DataFrame | None:
 
 
 def download(syms: list[str]) -> dict[str, pd.DataFrame]:
-    out: dict[str, pd.DataFrame] = {}
-    n = len(syms)
-    for i in range(0, n, BATCH):
-        bt = syms[i : i + BATCH]
-        print(f"download {min(i + BATCH, n)}/{n}", flush=True)
-        got = download_batch_with_retry(bt)
-        out.update(got)
-        missing = [s for s in bt if s not in out]
-        if missing:
-            print(f"  per-symbol retry for {len(missing)} missing", flush=True)
-            for s in missing:
-                frame = download_symbol_with_retry(s)
-                if frame is not None:
-                    out[s] = frame
-                time.sleep(0.05)
-        time.sleep(0.15)
-    return out
+    expected = last_complete_us_session_date()
+    frames, stats = download_daily(syms, expected, lookback_days=LOOKBACK_DAYS, batch_size=BATCH)
+    download.last_stats = stats
+    download.last_expected = expected
+    return frames
 
 
 def market_cap_ok(sym: str) -> bool:
@@ -458,6 +447,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     print("stats:", stats, flush=True)
     print(f"L sample: {hits_l[:20]}", flush=True)
     print(f"M sample: {hits_m[:20]}", flush=True)
+
+    expected = getattr(download, "last_expected", last_complete_us_session_date())
+    dl = getattr(download, "last_stats", None)
+    if dl is None:
+        ok, info = False, {}
+        yahoo = retry = stooq = fresh_n = denom_n = 0
+    else:
+        ok, info = dl.freshness(expected, full_universe=True)
+        yahoo, retry, stooq = dl.yahoo, dl.retry, dl.stooq
+        fresh_n, denom_n = dl.fresh, dl.requested
+    result_word = "BLOCKED" if not ok else ("DRY_RUN" if args.dry_run else "WROTE")
+    print(format_status(session=expected, writer="Zhuli", fresh=fresh_n, denom=denom_n or 1,
+                        yahoo=yahoo, retry=retry, stooq=stooq, result=result_word), flush=True)
+    if not ok:
+        print(f"BLOCKED (freshness < 0.90): {info} — not written", file=sys.stderr, flush=True)
+        return 3
 
     if args.dry_run:
         print("dry-run OK (no Sheet write)", flush=True)

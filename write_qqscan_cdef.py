@@ -43,8 +43,8 @@ from typing import Iterable, Optional
 
 import pandas as pd
 
+from marketdata import download_daily, format_status
 from run_extrascan import (
-    download,
     drop_forming,
     last_complete_us_session_date,
     load_etf_list,
@@ -449,6 +449,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"QQscan CDEF cols={cols} expected_session={expected} dry_run={args.dry_run}", flush=True)
 
     result: dict = {"expected": expected.isoformat(), "columns": {}, "groups": {}}
+    etf_dl = us_dl = None
     values: dict[str, list[str]] = {}
     blocked: list[str] = []
 
@@ -457,7 +458,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if etf_cols:
         etf_path = Path(args.etf_list)
         etfs = load_etf_list(etf_path)
-        frames, _failed = download(etfs)
+        frames, etf_dl = download_daily(etfs, expected)
         checks = {}
         if "C" in etf_cols:
             checks["C"] = lambda d: td_sell9(d["Close"])
@@ -490,7 +491,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # --- US stocks group (E) ---
     if "E" in cols:
         uni = parse_symbols(args.symbols) if args.symbols.strip() else universe_us_ex_etf_fund()
-        frames, _failed = download(uni)
+        frames, us_dl = download_daily(uni, expected)
         ev = evaluate(frames, uni, expected, {"E": zhuli_daily_cross_up}, asof)
         result["groups"]["US"] = {k: v for k, v in ev.items() if k not in ("hits", "stale", "missing")}
         result["groups"]["US"]["n_stale"] = len(ev["stale"])
@@ -528,6 +529,41 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"QQscan {c} written n={n}", flush=True)
     else:
         print("dry-run OK (no Sheet write)", flush=True)
+
+    etf_g = result.get("groups", {}).get("ETF") or {}
+    us_g = result.get("groups", {}).get("US") or {}
+    yahoo = retry = stooq = 0
+    extras = []
+    fresh_n = denom_n = 0
+    for label, g in (("ETF", etf_g), ("US", us_g)):
+        if not g:
+            continue
+        f = int(g.get("fresh") or 0)
+        d = int(g.get("universe") or 0)
+        extras.append(f"{label}={f}/{d}={g.get('frac')}")
+        fresh_n += f
+        denom_n += d
+    for st in (etf_dl, us_dl):
+        if st is None:
+            continue
+        yahoo += int(getattr(st, "yahoo", 0) or 0)
+        retry += int(getattr(st, "retry", 0) or 0)
+        stooq += int(getattr(st, "stooq", 0) or 0)
+    result_word = "BLOCKED" if blocked else ("WROTE" if not args.dry_run else "DRY_RUN")
+    print(
+        format_status(
+            session=expected,
+            writer="CDEF",
+            fresh=fresh_n,
+            denom=denom_n or 1,
+            yahoo=yahoo,
+            retry=retry,
+            stooq=stooq,
+            result=result_word,
+            extra=" ".join(extras),
+        ),
+        flush=True,
+    )
 
     if blocked:
         print(f"BLOCKED (freshness < {MIN_FRESH_FRAC}): {blocked} — not written", file=sys.stderr, flush=True)

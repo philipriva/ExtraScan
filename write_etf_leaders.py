@@ -28,6 +28,7 @@ except ImportError:
     sys.exit(1)
 
 from sheets_writer import QQSCAN_HEADERS, write_column, _client
+from marketdata import download_daily, format_status, last_complete_us_session_date, MIN_FRESH_FRAC
 
 DEFAULT_SHEET_ID = "1FSOmey7ALHFuYXxZSgjZnjWA5zpmbiv48PWAJD_yYRk"
 TAB_QQ = "QQscan"
@@ -61,28 +62,23 @@ def analyze_holdings(etf_symbol: str, symbols: list[str]) -> list[str]:
 
     results: list[str] = []
     batch_size = 15
+    expected = last_complete_us_session_date()
     for i in range(0, len(cleaned_symbols), batch_size):
         batch = cleaned_symbols[i : i + batch_size]
         try:
-            data = yf.download(
-                batch,
-                period="max",
-                interval="1d",
-                group_by="ticker",
-                progress=False,
-                threads=True,
-            )
-            if data is None or data.empty:
+            # period=max preserves ATH lookback (screening unchanged).
+            frames, st = download_daily(batch, expected, period="max", batch_size=batch_size)
+            acc = getattr(analyze_holdings, "dl_stats", None)
+            if acc is not None:
+                acc.append(st)
+            if not frames:
                 continue
 
             for symbol in batch:
                 try:
-                    if len(batch) == 1:
-                        df = data
-                    else:
-                        if symbol not in data.columns.levels[0]:
-                            continue
-                        df = data[symbol]
+                    df = frames.get(symbol)
+                    if df is None or df.empty:
+                        continue
 
                     close_data = df["Close"].dropna()
 
@@ -262,6 +258,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("skip G requested; done", flush=True)
         return 0
 
+    analyze_holdings.dl_stats = []
+    expected = last_complete_us_session_date()
+
     # --- Column G: ETF holdings leaders ---
     if args.etfs.strip():
         etf_list = [
@@ -319,16 +318,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
             print("-" * 30, flush=True)
             every = int(args.checkpoint_every or 0)
-            if (
-                every > 0
-                and not args.dry_run
-                and sa
-                and (i % every == 0 or i == len(etf_list))
-            ):
-                partial = sorted(all_leaders)
-                n_g = write_column(sa, args.sheet_id, TAB_QQ, "G", partial, header=QQSCAN_HEADERS["G"])
+            if every > 0 and (i % every == 0 or i == len(etf_list)):
+                # Defer Sheet writes until the freshness gate at the end so a
+                # stale Yahoo last bar cannot overwrite G mid-run.
                 print(
-                    f"checkpoint QQscan G={n_g} after {i}/{len(etf_list)} ETFs",
+                    f"checkpoint (local only) unique={len(all_leaders)} after {i}/{len(etf_list)} ETFs",
                     flush=True,
                 )
 
@@ -348,6 +342,37 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(s, flush=True)
     if len(leaders_sorted) > 50:
         print(f"... +{len(leaders_sorted) - 50} more", flush=True)
+
+    # Freshness across all downloaded holdings (full attempted-symbol denom).
+    acc = getattr(analyze_holdings, "dl_stats", []) or []
+    requested = sum(st.requested for st in acc)
+    fresh_n = sum(st.fresh for st in acc)
+    yahoo = sum(st.yahoo for st in acc)
+    retry = sum(st.retry for st in acc)
+    stooq = sum(st.stooq for st in acc)
+    frac = (fresh_n / requested) if requested else 0.0
+    fresh_ok = requested > 0 and frac >= MIN_FRESH_FRAC
+    result_word = "BLOCKED" if not fresh_ok else ("DRY_RUN" if args.dry_run else "WROTE")
+    print(
+        format_status(
+            session=expected,
+            writer="ETFLeaders",
+            fresh=fresh_n,
+            denom=requested or 1,
+            yahoo=yahoo,
+            retry=retry,
+            stooq=stooq,
+            result=result_word,
+        ),
+        flush=True,
+    )
+    if not fresh_ok:
+        print(
+            f"BLOCKED (freshness < {MIN_FRESH_FRAC}): holdings fresh={fresh_n}/{requested} — G not written",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 3
 
     if args.dry_run:
         print("dry-run OK (no Sheet write for G)", flush=True)

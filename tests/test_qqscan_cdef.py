@@ -14,6 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import sheets_writer  # noqa: E402
 import write_qqscan_cdef as m  # noqa: E402
 
+class _DlStats:
+    yahoo = retry = stooq = missing = requested = fresh = 0
+    last_bar_hist = {}
+
+
 
 def _frame(closes, start="2026-01-01"):
     idx = pd.bdate_range(start, periods=len(closes))
@@ -139,7 +144,7 @@ def test_write_path_only_touches_cdef(monkeypatch):
     fresh = _frame([10, 10, 10, 10, 10, 11], start="2026-11-02")
     monkeypatch.setattr(m, "last_complete_us_session_date", lambda: exp)
     monkeypatch.setattr(m, "load_etf_list", lambda p: ["AAA"])
-    monkeypatch.setattr(m, "download", lambda syms: ({s: fresh for s in syms}, []))
+    monkeypatch.setattr(m, "download_daily", lambda syms, expected=None, **k: ({s: fresh for s in syms}, _DlStats()))
     rc = m.main(["--columns", "C,D,F", "--skip-holdings"])
     assert rc == 0
     assert sorted(calls) == [("QQscan", "C"), ("QQscan", "D"), ("QQscan", "F")]
@@ -152,7 +157,7 @@ def test_stale_blocks_write(monkeypatch):
     stale = _frame([10, 10, 10, 10, 10, 11], start="2026-10-30")
     monkeypatch.setattr(m, "last_complete_us_session_date", lambda: date(2026, 11, 9))
     monkeypatch.setattr(m, "parse_symbols", lambda t: ["AAA", "BBB"])
-    monkeypatch.setattr(m, "download", lambda syms: ({s: stale for s in syms}, []))
+    monkeypatch.setattr(m, "download_daily", lambda syms, expected=None, **k: ({s: stale for s in syms}, _DlStats()))
     rc = m.main(["--columns", "E", "--symbols", "AAA,BBB"])
     assert rc == 3 and calls == []
 
@@ -208,7 +213,7 @@ def test_e_write_path_applies_filters(monkeypatch):
     monkeypatch.setattr(sheets_writer, "write_column", lambda sa, sid, tab, col, vals, header=None: calls.append((tab, col, list(vals))) or len(vals))
     exp = date(2026, 11, 9)
     monkeypatch.setattr(m, "last_complete_us_session_date", lambda: exp)
-    monkeypatch.setattr(m, "download", lambda syms: ({s: _rising() for s in syms}, []))
+    monkeypatch.setattr(m, "download_daily", lambda syms, expected=None, **k: ({s: _rising() for s in syms}, _DlStats()))
     monkeypatch.setattr(m, "zhuli_daily_cross_up", lambda d: True)
     monkeypatch.setattr(m, "fetch_mcap", lambda s: {"AAA": 2e9}.get(s))
     rc = m.main(["--columns", "E", "--symbols", "AAA,BBB"])
@@ -243,7 +248,7 @@ def test_backup_skips_without_write(monkeypatch):
     monkeypatch.setattr(sheets_writer, "write_column", lambda *a, **k: calls.append(a) or 0)
     monkeypatch.setattr(m, "last_complete_us_session_date", lambda: date(2026, 11, 9))
     monkeypatch.setattr(m, "_fetch_workflow_runs", lambda: [_run(1)])
-    monkeypatch.setattr(m, "download", lambda syms: (_ for _ in ()).throw(AssertionError("no download")))
+    monkeypatch.setattr(m, "download_daily", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no download")))
     assert m.main(["--skip-if-primary-done"]) == 0 and calls == []
 
 
@@ -253,7 +258,7 @@ def test_backup_skips_when_workflow_run_primary_wrote(monkeypatch):
     monkeypatch.setattr(sheets_writer, "write_column", lambda *a, **k: calls.append(a) or 0)
     monkeypatch.setattr(m, "last_complete_us_session_date", lambda: date(2026, 11, 9))
     monkeypatch.setattr(m, "_fetch_workflow_runs", lambda: [_run(9, ev="workflow_run")])
-    monkeypatch.setattr(m, "download", lambda syms: (_ for _ in ()).throw(AssertionError("no download")))
+    monkeypatch.setattr(m, "download_daily", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no download")))
     assert m.main(["--skip-if-primary-done"]) == 0 and calls == []
 
 
@@ -266,7 +271,7 @@ def test_backup_runs_when_primary_missing(monkeypatch):
     monkeypatch.setattr(m, "last_complete_us_session_date", lambda: exp)
     monkeypatch.setattr(m, "_fetch_workflow_runs", lambda: [_run(1, concl="failure")])
     monkeypatch.setattr(m, "load_etf_list", lambda p: ["AAA"])
-    monkeypatch.setattr(m, "download", lambda syms: ({s: fresh for s in syms}, []))
+    monkeypatch.setattr(m, "download_daily", lambda syms, expected=None, **k: ({s: fresh for s in syms}, _DlStats()))
     assert m.main(["--skip-if-primary-done", "--columns", "C,D,F", "--skip-holdings"]) == 0
     assert sorted(calls) == ["C", "D", "F"]
 
@@ -279,5 +284,5 @@ def test_backup_api_error_runs_normally_but_stale_still_blocks(monkeypatch):
     monkeypatch.setattr(m, "_fetch_workflow_runs", lambda: (_ for _ in ()).throw(RuntimeError("api down")))
     stale = _frame([10, 10, 10, 10, 10, 11], start="2026-10-30")
     monkeypatch.setattr(m, "parse_symbols", lambda t: ["AAA"])
-    monkeypatch.setattr(m, "download", lambda syms: ({s: stale for s in syms}, []))
+    monkeypatch.setattr(m, "download_daily", lambda syms, expected=None, **k: ({s: stale for s in syms}, _DlStats()))
     assert m.main(["--skip-if-primary-done", "--columns", "E", "--symbols", "AAA"]) == 3 and calls == []

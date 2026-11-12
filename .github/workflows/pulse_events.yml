@@ -21,6 +21,8 @@ on:
     # (~1 min job): 08:13 JST Tue–Sat; 10:17 JST Tue–Sat.
     - cron: "13 23 * * 1-5"
     - cron: "17 1 * * 2-6"
+    # Late backup 15:00 JST Tue–Sat (Yahoo last-bar often incomplete earlier).
+    - cron: "0 6 * * 2-6"
   workflow_dispatch:
     inputs:
       refresh_universe:

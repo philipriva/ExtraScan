@@ -6,6 +6,11 @@ on:
   pull_request:
     paths:
       - "write_qqscan_cdef.py"
+      - "marketdata.py"
+      - "run_extrascan.py"
+      - "write_zhuli_lm.py"
+      - "write_pulse_events.py"
+      - "write_etf_leaders.py"
       - "skip_if_session_done.py"
       - "tests/**"
       - ".github/workflows/qqscan_cdef*.yml"
