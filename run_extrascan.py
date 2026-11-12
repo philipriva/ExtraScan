@@ -28,6 +28,14 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+from marketdata import (
+    download_daily,
+    drop_forming as _md_drop_forming,
+    format_status,
+    freshness_ok as _md_freshness_ok,
+    last_complete_us_session_date as _md_last_complete_us_session_date,
+)
+
 NASDAQ_LISTED = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 OTHER_LISTED = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
 
@@ -263,35 +271,14 @@ def hkt_now_str() -> str:
 
 
 def drop_forming(d: pd.DataFrame) -> pd.DataFrame:
-    """Drop today's daily bar until after 16:00 ET.
-
-    Matches banker_screener_app_new.drop_incomplete_bar(tf_key="1D") when
-    only_completed=True. ExtraScan always runs in that mode (post-close GH
-    Action); Banker GUI default only_completed=False keeps the forming bar.
-    """
-    if d is None or d.empty:
-        return d
-    now = ny_now()
-    last = pd.Timestamp(d.index[-1]).date()
-    if last == now.date() and (now.hour, now.minute) < (16, 0):
-        return d.iloc[:-1]
-    return d
+    """Drop today's daily bar until the NYSE cash session has closed."""
+    return _md_drop_forming(d)
 
 
 
 def last_complete_us_session_date(now: datetime | None = None) -> date:
-    """Prior complete US cash session date (America/New_York).
-
-    After 16:00 ET, today's daily bar is complete → expect today (weekdays).
-    Before 16:00 ET, expect the previous weekday. Weekends roll back to Friday.
-    """
-    now = now or ny_now()
-    d = now.date()
-    if (now.hour, now.minute) < (16, 0):
-        d = d - timedelta(days=1)
-    while d.weekday() >= 5:  # Sat/Sun
-        d = d - timedelta(days=1)
-    return d
+    """Prior complete NYSE cash session (holidays + early closes)."""
+    return _md_last_complete_us_session_date(now)
 
 
 def asof_session_str(session: date | None = None) -> str:
@@ -411,25 +398,13 @@ def download_symbol_with_retry(sym: str) -> pd.DataFrame | None:
     return None
 
 
-def download(syms: list[str]) -> tuple[dict[str, pd.DataFrame], list[str]]:
-    out: dict[str, pd.DataFrame] = {}
-    n = len(syms)
-    for i in range(0, n, BATCH):
-        bt = syms[i : i + BATCH]
-        print(f"download {min(i + BATCH, n)}/{n}", flush=True)
-        got = download_batch_with_retry(bt)
-        out.update(got)
-        missing = [s for s in bt if s not in out]
-        if missing:
-            print(f"  per-symbol retry for {len(missing)} missing", flush=True)
-            for s in missing:
-                frame = download_symbol_with_retry(s)
-                if frame is not None:
-                    out[s] = frame
-                time.sleep(0.05)
-        time.sleep(0.15)
-    failed = [s for s in syms if s not in out]
-    return out, failed
+def download(syms: list[str], expected=None) -> tuple[dict[str, pd.DataFrame], list[str]]:
+    """Yahoo-primary daily download with stale-bar retry + Stooq gap-fill."""
+    expected = expected or last_complete_us_session_date()
+    frames, stats = download_daily(syms, expected, lookback_days=LOOKBACK_DAYS, batch_size=BATCH)
+    download.last_stats = stats
+    failed = [s for s in syms if s not in frames]
+    return frames, failed
 
 
 def screen_split(
@@ -437,7 +412,8 @@ def screen_split(
 ) -> tuple[list[str], list[str], dict]:
     """Return (yellow_hits, white_hits, stats_dict). Separate — not union."""
     print(f"[{label}] universe={len(syms)}", flush=True)
-    data, dl_failed = download(syms)
+    data, dl_failed = download(syms, expected=last_complete_us_session_date())
+    dl_stats = getattr(download, "last_stats", None)
     yellow: list[str] = []
     white: list[str] = []
     norm_fail: list[str] = []
@@ -484,6 +460,14 @@ def screen_split(
         "expected_session": expected.isoformat(),
         "fresh_ok": ok_fresh,
         "fresh_info": fresh_info,
+        "dl_stats": None if dl_stats is None else {
+            "yahoo": dl_stats.yahoo,
+            "retry": dl_stats.retry,
+            "stooq": dl_stats.stooq,
+            "missing": dl_stats.missing,
+            "requested": dl_stats.requested,
+            "fresh": dl_stats.fresh,
+        },
     }
     print(
         f"[{label}] freshness expected={expected} "
@@ -657,6 +641,36 @@ def main() -> int:
         )
         for st in stale:
             print(f"  stale label={st.get('label')} info={st.get('fresh_info')}", flush=True)
+
+    # One STATUS line for the run (Yahoo primary; retry / Stooq from download_daily).
+    yahoo = retry = stooq = fresh_n = denom_n = 0
+    extras = []
+    for st in all_stats:
+        ds = st.get("dl_stats") or {}
+        yahoo += int(ds.get("yahoo") or 0)
+        retry += int(ds.get("retry") or 0)
+        stooq += int(ds.get("stooq") or 0)
+        fi = st.get("fresh_info") or {}
+        f, d = int(fi.get("fresh") or 0), int(fi.get("screened") or 0)
+        extras.append(f"{st.get('label')}={f}/{d}")
+        fresh_n += f
+        denom_n += d
+    result = "BLOCKED" if stale else "WROTE"
+    # Sheets may still be skipped below; WROTE means freshness passed and we will write.
+    print(
+        format_status(
+            session=session,
+            writer="Daily",
+            fresh=fresh_n,
+            denom=denom_n or 1,
+            yahoo=yahoo,
+            retry=retry,
+            stooq=stooq,
+            result=result if denom_n else "BLOCKED",
+            extra=" ".join(extras),
+        ),
+        flush=True,
+    )
 
     stats_path = cwd / args.out_dir / "download_stats.txt"
     lines = [

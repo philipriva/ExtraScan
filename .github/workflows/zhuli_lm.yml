@@ -18,6 +18,8 @@ on:
     # (~35 min job): 08:07 JST Tue–Sat; 10:11 JST Tue–Sat.
     - cron: "7 23 * * 1-5"
     - cron: "11 1 * * 2-6"
+    # Late backup 15:00 JST Tue–Sat (Yahoo last-bar often incomplete earlier).
+    - cron: "0 6 * * 2-6"
   workflow_dispatch:
 
 permissions:
