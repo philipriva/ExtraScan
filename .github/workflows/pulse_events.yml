@@ -15,14 +15,22 @@ on:
   schedule:
     # Mon–Fri 21:50 UTC ≈ 17:50 EDT (US close 16:00 + ~1h50)
     - cron: "50 21 * * 1-5"
-    # Backup: Tue–Sat 00:40 UTC
+    # Backup: Tue–Sat 00:40 UTC ≈ 09:40 JST
     - cron: "40 0 * * 2-6"
+    # Extra morning backups (Philip t337u), odd minutes, before 11:00 JST
+    # (~1 min job): 08:13 JST Tue–Sat; 10:17 JST Tue–Sat.
+    - cron: "13 23 * * 1-5"
+    - cron: "17 1 * * 2-6"
   workflow_dispatch:
     inputs:
       refresh_universe:
         description: "Also overwrite universe tab from pulse_universe.csv"
         type: boolean
         default: false
+
+permissions:
+  contents: read
+  actions: read
 
 concurrency:
   group: pulse-events-sheet
@@ -34,12 +42,21 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: Skip if session already succeeded
+        id: already
+        if: github.event_name == 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 skip_if_session_done.py --workflow pulse_events.yml
       - uses: actions/setup-python@v5
+        if: steps.already.outputs.skip != 'true'
         with:
           python-version: "3.12"
       - name: Install deps
+        if: steps.already.outputs.skip != 'true'
         run: pip install -r requirements.txt
       - name: Screen → events + ff_state tabs
+        if: steps.already.outputs.skip != 'true'
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           PULSE_SHEET_ID: "11ew_PpHdAnFDn6TWTsGp8qX7GXoYxQOtpvIt_DHmqZ8"
@@ -52,7 +69,7 @@ jobs:
           fi
           python write_pulse_events.py --out-csv out/pulse_events.csv $EXTRA
       - name: Upload artifact
-        if: always()
+        if: always() && steps.already.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: pulse_events_out

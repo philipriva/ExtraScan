@@ -13,10 +13,11 @@ name: QQscan C D E F
 #
 # Schedule approved by Philip 2026-11-10 (t328u). GitHub cron is UTC.
 #   Primary: 0 22 * * 1-5  ≈ 07:00 JST Tue–Sat (US close + 1–2h)
-#   Backup:  45 1 * * 2-6  ≈ 10:45 JST Tue–Sat — exits 0 with NO write if a
-#            primary (schedule or workflow_run) already succeeded for the same
-#            expected session.
-# Primary runs (schedule 07:00 + workflow_run) always write (dry_run=false).
+#   Extra backups (Philip t337u), odd minutes, finish before 11:00 JST (~35 min):
+#     53 23 * * 1-5 ≈ 08:53 JST Tue–Sat; 47 0 * * 2-6 ≈ 09:47 JST Tue–Sat.
+#   Late backup: 45 1 * * 2-6 ≈ 10:45 JST Tue–Sat (may finish after 11:00).
+# All schedule crons pass --skip-if-primary-done (workflow_run stays a primary
+# write). Skip if a schedule or workflow_run already succeeded for the session.
 # Freshness/.90 guard unchanged: stale → that group is not written (old values
 # kept), run fails (exit 3).
 # concurrency group qqscan-cdef (cancel-in-progress: false) queues overlapping
@@ -27,6 +28,8 @@ on:
     types: [completed]
   schedule:
     - cron: "0 22 * * 1-5"
+    - cron: "53 23 * * 1-5"
+    - cron: "47 0 * * 2-6"
     - cron: "45 1 * * 2-6"
   workflow_dispatch:
     inputs:
@@ -79,7 +82,7 @@ jobs:
             COLS="${{ inputs.columns }}"
             if [ "${{ inputs.dry_run }}" = "true" ]; then EXTRA+=(--dry-run); fi
           fi
-          if [ "${{ github.event.schedule }}" = "45 1 * * 2-6" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ]; then
             EXTRA+=(--skip-if-primary-done)
           fi
           python write_qqscan_cdef.py --columns "$COLS" --out-json cdef_result.json "${EXTRA[@]}"

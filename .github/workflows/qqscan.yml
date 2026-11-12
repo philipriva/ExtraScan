@@ -24,6 +24,9 @@ on:
     #          still far from Fund Flow ExtraScan at 15 20 * * 1-5 UTC).
     # File-driven: Strong + Maggie repository_dispatch write A/J without waiting on cron.
     - cron: "0 1 * * 2-6"
+    # Extra pre-11:00 backup (Philip t337u): 10:37 JST Tue–Sat (~1–15 min).
+    # After the 10:00 primary so Strong/Maggie files have a better chance to exist.
+    - cron: "37 1 * * 2-6"
     - cron: "15 4 * * 2-6"
   workflow_dispatch:
     inputs:
@@ -36,6 +39,10 @@ on:
     # Q-scanner → maggiestocks-updated after Maggiestocks_*.txt (needs same PAT secret)
     types: [strong-stocks-updated, maggiestocks-updated]
 
+permissions:
+  contents: read
+  actions: read
+
 concurrency:
   group: qqscan-sheet
   cancel-in-progress: false
@@ -46,12 +53,21 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Skip if session already succeeded
+        id: already
+        if: github.event_name == 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 skip_if_session_done.py --workflow qqscan.yml
       - uses: actions/setup-python@v5
+        if: steps.already.outputs.skip != 'true'
         with:
           python-version: "3.12"
       - name: Install deps
+        if: steps.already.outputs.skip != 'true'
         run: pip install -r requirements.txt
       - name: Write QQscan A + J
+        if: steps.already.outputs.skip != 'true'
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
