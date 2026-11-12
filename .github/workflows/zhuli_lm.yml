@@ -12,9 +12,17 @@ on:
   schedule:
     # Primary: Mon–Fri 21:45 UTC ≈ 17:45 EDT (US close 16:00 + ~1h45)
     - cron: "45 21 * * 1-5"
-    # Backup: Tue–Sat 00:30 UTC ≈ 08:30 HKT (catches primary skip)
+    # Backup: Tue–Sat 00:30 UTC ≈ 09:30 JST (catches primary skip)
     - cron: "30 0 * * 2-6"
+    # Extra morning backups (Philip t337u), odd minutes, finish before 11:00 JST
+    # (~35 min job): 08:07 JST Tue–Sat; 10:11 JST Tue–Sat.
+    - cron: "7 23 * * 1-5"
+    - cron: "11 1 * * 2-6"
   workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
 
 concurrency:
   group: zhuli-lm-qqscan
@@ -26,12 +34,21 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
+      - name: Skip if session already succeeded
+        id: already
+        if: github.event_name == 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 skip_if_session_done.py --workflow zhuli_lm.yml
       - uses: actions/setup-python@v5
+        if: steps.already.outputs.skip != 'true'
         with:
           python-version: "3.12"
       - name: Install deps
+        if: steps.already.outputs.skip != 'true'
         run: pip install -r requirements.txt
       - name: Screen → QQscan L + M
+        if: steps.already.outputs.skip != 'true'
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: |
@@ -39,7 +56,7 @@ jobs:
           echo "event=${{ github.event_name }}"
           python write_zhuli_lm.py
       - name: Upload artifact
-        if: always()
+        if: always() && steps.already.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: zhuli_lm_log

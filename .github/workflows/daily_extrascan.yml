@@ -8,7 +8,12 @@ on:
     # Later than cash+15m so Yahoo daily bars usually show the session date;
     # run_extrascan also refuses Sheets write if last bar ≠ prior complete session.
     - cron: "30 21 * * 1-5"
-    # Backup: Tue–Sat 06:00 UTC ≈ 15:00 JST / 02:00 ET — Yahoo full-universe
+    # Morning backups (Philip t337u): odd-minute crons before 11:00 JST so a
+    # delayed/missed 06:30 still finishes in time (~35 min job).
+    # 19 23 * * 1-5 ≈ 08:19 JST Tue–Sat; 41 0 * * 2-6 ≈ 09:41 JST Tue–Sat.
+    - cron: "19 23 * * 1-5"
+    - cron: "41 0 * * 2-6"
+    # Late backup: Tue–Sat 06:00 UTC ≈ 15:00 JST / 02:00 ET — Yahoo full-universe
     # bars often incomplete at the primary window (2026-10-29 schedule failed
     # freshness at ~01:05 UTC with frac~0.29; same-day manual ~06:25 UTC OK).
     - cron: "0 6 * * 2-6"
@@ -19,18 +24,35 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: daily-extrascan
+  cancel-in-progress: false
+
 jobs:
   screen:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+      - name: Skip if session already succeeded
+        id: already
+        if: github.event_name == 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 skip_if_session_done.py --workflow daily_extrascan.yml
       - uses: actions/setup-python@v5
+        if: steps.already.outputs.skip != 'true'
         with:
           python-version: "3.12"
       - name: Install deps
+        if: steps.already.outputs.skip != 'true'
         run: pip install -r requirements.txt
       - name: Run ExtraScan
+        if: steps.already.outputs.skip != 'true'
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: |
@@ -40,7 +62,7 @@ jobs:
           fi
           python run_extrascan.py --out-dir out $EXTRA
       - name: Upload artifacts
-        if: always()
+        if: always() && steps.already.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: extrascan_out

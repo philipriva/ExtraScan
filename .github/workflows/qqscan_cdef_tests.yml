@@ -6,8 +6,10 @@ on:
   pull_request:
     paths:
       - "write_qqscan_cdef.py"
+      - "skip_if_session_done.py"
       - "tests/**"
       - ".github/workflows/qqscan_cdef*.yml"
+      - ".github/workflows/*.yml"
   workflow_dispatch:
 
 permissions:
