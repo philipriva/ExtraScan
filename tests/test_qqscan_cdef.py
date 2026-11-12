@@ -229,6 +229,8 @@ def _run(i, ev="schedule", concl="success", ts="2026-11-09T22:05:00Z"):
 def test_primary_already_wrote_rules():
     exp = date(2026, 11, 9)
     assert m.primary_already_wrote([_run(1)], exp)["id"] == 1
+    assert m.primary_already_wrote([_run(1, ev="workflow_run")], exp)["id"] == 1  # Daily ExtraScan hook is a primary
+    assert m.primary_already_wrote([_run(1, ev="workflow_run", concl="failure")], exp) is None
     assert m.primary_already_wrote([_run(1, concl="failure")], exp) is None  # blocked/stale primary
     assert m.primary_already_wrote([_run(1, ev="workflow_dispatch")], exp) is None  # may be dry-run
     assert m.primary_already_wrote([_run(1, ts="2026-11-06T22:05:00Z")], exp) is None  # older session
@@ -241,6 +243,16 @@ def test_backup_skips_without_write(monkeypatch):
     monkeypatch.setattr(sheets_writer, "write_column", lambda *a, **k: calls.append(a) or 0)
     monkeypatch.setattr(m, "last_complete_us_session_date", lambda: date(2026, 11, 9))
     monkeypatch.setattr(m, "_fetch_workflow_runs", lambda: [_run(1)])
+    monkeypatch.setattr(m, "download", lambda syms: (_ for _ in ()).throw(AssertionError("no download")))
+    assert m.main(["--skip-if-primary-done"]) == 0 and calls == []
+
+
+def test_backup_skips_when_workflow_run_primary_wrote(monkeypatch):
+    calls = []
+    monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_JSON", "{}")
+    monkeypatch.setattr(sheets_writer, "write_column", lambda *a, **k: calls.append(a) or 0)
+    monkeypatch.setattr(m, "last_complete_us_session_date", lambda: date(2026, 11, 9))
+    monkeypatch.setattr(m, "_fetch_workflow_runs", lambda: [_run(9, ev="workflow_run")])
     monkeypatch.setattr(m, "download", lambda syms: (_ for _ in ()).throw(AssertionError("no download")))
     assert m.main(["--skip-if-primary-done"]) == 0 and calls == []
 

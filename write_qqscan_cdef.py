@@ -352,9 +352,11 @@ def session_close_utc(session: date) -> "datetime":
 def primary_already_wrote(runs: list[dict], expected: date, current_run_id: Optional[int] = None) -> Optional[dict]:
     """Return the scheduled run that already wrote ``expected`` successfully, else None.
 
-    A scheduled run always writes (dry_run=false) and exits non-zero when any
-    column group is blocked (stale / <.90), so event=schedule + conclusion=success
+    A primary run (schedule or workflow_run after Daily ExtraScan) always writes
+    (dry_run=false) and exits non-zero when any column group is blocked
+    (stale / <.90), so event in {schedule, workflow_run} + conclusion=success
     + created after that session's 16:00 ET close == that session was written.
+    workflow_dispatch is ignored (may be dry-run).
     """
     from datetime import datetime
 
@@ -362,7 +364,7 @@ def primary_already_wrote(runs: list[dict], expected: date, current_run_id: Opti
     for r in runs:
         if current_run_id is not None and int(r.get("id", 0)) == int(current_run_id):
             continue
-        if r.get("event") != "schedule" or r.get("conclusion") != "success":
+        if r.get("event") not in ("schedule", "workflow_run") or r.get("conclusion") != "success":
             continue
         ts = r.get("created_at") or r.get("run_started_at") or ""
         try:
@@ -383,9 +385,14 @@ def _fetch_workflow_runs() -> list[dict]:
     headers = {"Accept": "application/vnd.github+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    resp = requests.get(url, headers=headers, params={"per_page": 30, "event": "schedule"}, timeout=30)
-    resp.raise_for_status()
-    return resp.json().get("workflow_runs", [])
+    seen: dict[int, dict] = {}
+    # Backup must see both cron primaries and the Daily ExtraScan workflow_run hook.
+    for event in ("schedule", "workflow_run"):
+        resp = requests.get(url, headers=headers, params={"per_page": 30, "event": event}, timeout=30)
+        resp.raise_for_status()
+        for r in resp.json().get("workflow_runs", []):
+            seen[int(r.get("id", 0) or 0)] = r
+    return list(seen.values())
 
 
 def parse_cols(text: str) -> list[str]:
@@ -409,7 +416,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument(
         "--skip-if-primary-done",
         action="store_true",
-        help="Backup mode: exit 0 without writing if a scheduled run already wrote the expected session",
+        help="Backup mode: exit 0 without writing if a primary (schedule or workflow_run) already wrote the expected session",
     )
     args = p.parse_args(argv)
 
