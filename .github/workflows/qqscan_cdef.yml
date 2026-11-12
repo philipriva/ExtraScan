@@ -16,8 +16,9 @@ name: QQscan C D E F
 #   Extra backups (Philip t337u), odd minutes, finish before 11:00 JST (~35 min):
 #     53 23 * * 1-5 ≈ 08:53 JST Tue–Sat; 47 0 * * 2-6 ≈ 09:47 JST Tue–Sat.
 #   Late backup: 45 1 * * 2-6 ≈ 10:45 JST Tue–Sat (may finish after 11:00).
-# All schedule crons pass --skip-if-primary-done (workflow_run stays a primary
-# write). Skip if a schedule or workflow_run already succeeded for the session.
+# All schedule crons and workflow_run pass --skip-if-primary-done. Skip if a
+# schedule or workflow_run already succeeded for the session. Manual dispatch
+# is unchanged (default dry_run=true).
 # Freshness/.90 guard unchanged: stale → that group is not written (old values
 # kept), run fails (exit 3).
 # concurrency group qqscan-cdef (cancel-in-progress: false) queues overlapping
@@ -82,7 +83,9 @@ jobs:
             COLS="${{ inputs.columns }}"
             if [ "${{ inputs.dry_run }}" = "true" ]; then EXTRA+=(--dry-run); fi
           fi
-          if [ "${{ github.event_name }}" = "schedule" ]; then
+          # schedule backups and workflow_run both skip if this session was already written
+          # (a skipped Daily ExtraScan still concludes success and would otherwise re-write).
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_run" ]; then
             EXTRA+=(--skip-if-primary-done)
           fi
           python write_qqscan_cdef.py --columns "$COLS" --out-json cdef_result.json "${EXTRA[@]}"
