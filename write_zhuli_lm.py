@@ -26,7 +26,12 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
 
-from marketdata import download_daily, format_status, last_complete_us_session_date
+from marketdata import (
+    download_daily,
+    format_status,
+    freshness_ok,
+    last_complete_us_session_date,
+)
 from run_extrascan import (
     BATCH,
     DOWNLOAD_BACKOFF_SEC,
@@ -310,6 +315,10 @@ def screen(syms: list[str]) -> tuple[list[str], list[str], dict]:
         "cross_l": 0,
         "cross_m": 0,
     }
+    # Last completed daily bar of every symbol that reached the screen
+    # (downloaded, normalized, >= MIN_DAILY_BARS after drop_forming) — the same
+    # screened-only denominator Daily ExtraScan uses for its .90 gate.
+    bar_dates: list = []
     for sym in syms:
         raw = data.get(sym)
         if raw is None:
@@ -322,6 +331,7 @@ def screen(syms: list[str]) -> tuple[list[str], list[str], dict]:
         if d is None or len(d) < MIN_DAILY_BARS:
             stats["norm_fail"] += 1
             continue
+        bar_dates.append(pd.Timestamp(d.index[-1]).date())
         if not daily_filters_ok(d):
             stats["filter_fail"] += 1
             continue
@@ -355,7 +365,21 @@ def screen(syms: list[str]) -> tuple[list[str], list[str], dict]:
     stats["L"] = len(hits_l)
     stats["M"] = len(hits_m)
     print(f"post-mcap L={len(hits_l)} M={len(hits_m)}", flush=True)
+    stats["bar_dates"] = bar_dates
     return hits_l, hits_m, stats
+
+
+def lm_freshness(bar_dates: list, expected, universe_n: int) -> tuple[bool, dict]:
+    """.90 gate with Daily's screened-only denominator (threshold unchanged).
+
+    Uses marketdata.freshness_ok without universe_n, i.e. the Daily definition:
+    fresh = screened symbols whose last bar == expected session,
+    denom = screened symbols. Full universe size is reported for info only.
+    """
+    ok, info = freshness_ok(list(bar_dates), expected)
+    info["universe"] = universe_n
+    info["denom"] = "screened"
+    return ok, info
 
 
 def _looks_like_header(cell: str) -> bool:
@@ -444,6 +468,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"universe_us_ex_etf_fund n={len(syms)}", flush=True)
 
     hits_l, hits_m, stats = screen(syms)
+    bar_dates = stats.pop("bar_dates", [])
     print("stats:", stats, flush=True)
     print(f"L sample: {hits_l[:20]}", flush=True)
     print(f"M sample: {hits_m[:20]}", flush=True)
@@ -453,13 +478,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     if dl is None:
         ok, info = False, {}
         yahoo = retry = stooq = fresh_n = denom_n = 0
+        extra = "denom=screened"
     else:
-        ok, info = dl.freshness(expected, full_universe=True)
+        ok, info = lm_freshness(bar_dates, expected, len(syms))
         yahoo, retry, stooq = dl.yahoo, dl.retry, dl.stooq
-        fresh_n, denom_n = dl.fresh, dl.requested
+        fresh_n, denom_n = int(info.get("fresh") or 0), int(info.get("screened") or 0)
+        extra = f"denom=screened universe={len(syms)} universe_fresh={dl.fresh}/{dl.requested}"
+        if not denom_n:
+            ok = False
     result_word = "BLOCKED" if not ok else ("DRY_RUN" if args.dry_run else "WROTE")
     print(format_status(session=expected, writer="Zhuli", fresh=fresh_n, denom=denom_n or 1,
-                        yahoo=yahoo, retry=retry, stooq=stooq, result=result_word), flush=True)
+                        yahoo=yahoo, retry=retry, stooq=stooq, result=result_word,
+                        extra=extra), flush=True)
     if not ok:
         print(f"BLOCKED (freshness < 0.90): {info} — not written", file=sys.stderr, flush=True)
         return 3
