@@ -6,20 +6,19 @@ name: Zhuli L+M to QQscan
 # Universe: US ex-ETF/fund (same as yellowALL). One download pass.
 # Reuses GOOGLE_SERVICE_ACCOUNT_JSON. Does not touch A/G/H/J or Fund Flow tabs.
 #
-# Schedule: after US cash settle (EDT close+~1h45). Backup overnight.
-# Avoid colliding Fund Flow 15 20 and QQscan A/J 30 2 / 15 4.
+# Schedule: after Daily ExtraScan + CDEF (workflow_run ~07:05 JST).
+# Staggered vs other full-universe Yahoo writers. Avoid Fund Flow 15 20 UTC.
 on:
   schedule:
-    # Primary: Mon–Fri 21:45 UTC ≈ 17:45 EDT (US close 16:00 + ~1h45)
-    - cron: "45 21 * * 1-5"
-    # Backup: Tue–Sat 00:30 UTC ≈ 09:30 JST (catches primary skip)
-    - cron: "30 0 * * 2-6"
-    # Extra morning backups (Philip t337u), odd minutes, finish before 11:00 JST
-    # (~35 min job): 08:07 JST Tue–Sat; 10:11 JST Tue–Sat.
-    - cron: "7 23 * * 1-5"
-    - cron: "11 1 * * 2-6"
-    # Late backup 15:00 JST Tue–Sat (Yahoo last-bar often incomplete earlier).
-    - cron: "0 6 * * 2-6"
+    # Primary: 33 23 * * 1-5 ≈ 08:33 JST Tue–Sat (after CDEF ~07:05–07:40).
+    - cron: "33 23 * * 1-5"
+    # Mid backups, ~35 min job, offset from CDEF/us-exclude/Strong:
+    # 11:23 JST; 12:18 JST; 13:42 JST Tue–Sat.
+    - cron: "23 2 * * 2-6"
+    - cron: "18 3 * * 2-6"
+    - cron: "42 4 * * 2-6"
+    # Late backup 17:02 JST Tue–Sat (after CDEF late 16:22 in the 15:00 ladder).
+    - cron: "2 8 * * 2-6"
   workflow_dispatch:
 
 permissions:
