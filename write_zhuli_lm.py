@@ -27,6 +27,7 @@ import pandas as pd
 import yfinance as yf
 
 from marketdata import (
+    _run_with_timeout,
     download_daily,
     format_status,
     freshness_ok,
@@ -259,7 +260,16 @@ def download(syms: list[str]) -> dict[str, pd.DataFrame]:
     return frames
 
 
-def market_cap_ok(sym: str) -> bool:
+MCAP_CALL_TIMEOUT_SEC = 30  # per lookup; yfinance has no cancel
+MCAP_RETRY_ROUNDS = 4  # retries after the first pass, errored symbols only
+MCAP_BACKOFF_SEC = 20  # round r waits r * backoff
+MCAP_RETRY_WORKERS = 2  # gentler on Yahoo while rate-limited
+MCAP_BUDGET_SEC = 600  # whole mcap step incl. retries (job timeout 60 min)
+MCAP_MAX_ERR_FRAC = 0.10  # errors/candidates above this BLOCKS the write
+
+
+def market_cap_lookup(sym: str) -> Optional[float]:
+    """Market cap from Yahoo, or None when it could not be read (error/missing)."""
     try:
         t = yf.Ticker(sym)
         cap = None
@@ -275,29 +285,93 @@ def market_cap_ok(sym: str) -> bool:
             info = t.info or {}
             cap = info.get("marketCap")
         if cap is None:
-            return False
-        return float(cap) > MCAP_MIN
+            return None
+        cap = float(cap)
+        return None if pd.isna(cap) else cap
     except Exception:
-        return False
+        return None
 
 
-def filter_mcap(symbols: list[str]) -> list[str]:
-    if not symbols:
-        return []
-    print(f"mcap check n={len(symbols)} workers={MCAP_WORKERS}", flush=True)
-    ok: list[str] = []
-    with ThreadPoolExecutor(max_workers=MCAP_WORKERS) as ex:
-        futs = {ex.submit(market_cap_ok, s): s for s in symbols}
-        for i, fut in enumerate(as_completed(futs), 1):
-            sym = futs[fut]
-            try:
-                if fut.result():
-                    ok.append(sym)
-            except Exception:
-                pass
-            if i % 25 == 0 or i == len(futs):
-                print(f"  mcap {i}/{len(futs)} pass_so_far={len(ok)}", flush=True)
-    return sorted(ok)
+def market_cap_ok(sym: str) -> bool:
+    cap = market_cap_lookup(sym)
+    return cap is not None and cap > MCAP_MIN
+
+
+def filter_mcap(
+    symbols: list[str],
+    *,
+    lookup=None,
+    sleep=time.sleep,
+    clock=time.monotonic,
+    budget: float = MCAP_BUDGET_SEC,
+    rounds: int = MCAP_RETRY_ROUNDS,
+    backoff: float = MCAP_BACKOFF_SEC,
+    call_timeout: float = MCAP_CALL_TIMEOUT_SEC,
+) -> tuple[list[str], dict]:
+    """Return (symbols with mcap > MCAP_MIN, info).
+
+    A lookup that errors / times out / returns no cap is an *error*, not a fail;
+    errored symbols are retried with backoff inside a wall-clock budget.
+    A valid cap <= MCAP_MIN is a normal fail. info has candidates, mcap_ok
+    (valid lookups), mcap_pass, mcap_fail, mcap_err, err_symbols, rounds.
+    """
+    lookup = lookup or market_cap_lookup
+    syms = sorted(set(symbols))
+    info = {"candidates": len(syms), "mcap_ok": 0, "mcap_pass": 0, "mcap_fail": 0,
+            "mcap_err": 0, "err_symbols": [], "rounds": 0}
+    if not syms:
+        return [], info
+    print(f"mcap check n={len(syms)} workers={MCAP_WORKERS}", flush=True)
+    start = clock()
+    caps: dict[str, float] = {}
+    pending = list(syms)
+    for r in range(rounds + 1):
+        if r:
+            left = budget - (clock() - start)
+            wait = backoff * r
+            if left <= wait + 1:
+                print(f"  mcap budget exhausted before retry {r}; err={len(pending)}", flush=True)
+                break
+            print(f"  mcap retry {r}/{rounds} n={len(pending)} after {wait:.0f}s", flush=True)
+            sleep(wait)
+        left = budget - (clock() - start)
+        if left <= 1:
+            break
+        timeout = min(call_timeout, left)
+        workers = MCAP_WORKERS if r == 0 else MCAP_RETRY_WORKERS
+        info["rounds"] = r + 1
+        nxt: list[str] = []
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(_run_with_timeout, lookup, timeout, s): s for s in pending}
+            for i, fut in enumerate(as_completed(futs), 1):
+                sym = futs[fut]
+                try:
+                    cap = fut.result()
+                except Exception:
+                    cap = None
+                if cap is None:
+                    nxt.append(sym)
+                else:
+                    caps[sym] = float(cap)
+                if r == 0 and (i % 25 == 0 or i == len(futs)):
+                    print(f"  mcap {i}/{len(futs)} ok_so_far={len(caps)}", flush=True)
+        pending = sorted(nxt)
+        if not pending:
+            break
+    ok = sorted(s for s, c in caps.items() if c > MCAP_MIN)
+    info.update(mcap_ok=len(caps), mcap_pass=len(ok), mcap_fail=len(caps) - len(ok),
+                mcap_err=len(pending), err_symbols=pending)
+    print(f"  mcap done ok={len(caps)} pass={len(ok)} err={len(pending)} rounds={info['rounds']}",
+          flush=True)
+    return ok, info
+
+
+def mcap_lookup_ok(info: dict, max_err_frac: float = MCAP_MAX_ERR_FRAC) -> bool:
+    """False when errored lookups exceed max_err_frac of mcap candidates."""
+    n = int(info.get("candidates") or 0)
+    if n == 0:
+        return True
+    return (int(info.get("mcap_err") or 0) / n) <= max_err_frac
 
 
 def screen(syms: list[str]) -> tuple[list[str], list[str], dict]:
@@ -358,10 +432,12 @@ def screen(syms: list[str]) -> tuple[list[str], list[str], dict]:
     )
     # Mcap only on technical hits (union) to avoid 6k info calls.
     need_cap = sorted(set(cand_l) | set(cand_m))
-    cap_ok = set(filter_mcap(need_cap))
+    cap_list, mcap_info = filter_mcap(need_cap)
+    cap_ok = set(cap_list)
     hits_l = sorted(s for s in cand_l if s in cap_ok)
     hits_m = sorted(s for s in cand_m if s in cap_ok)
     stats["mcap_pass"] = len(cap_ok)
+    stats["mcap"] = mcap_info
     stats["L"] = len(hits_l)
     stats["M"] = len(hits_m)
     print(f"post-mcap L={len(hits_l)} M={len(hits_m)}", flush=True)
@@ -469,6 +545,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     hits_l, hits_m, stats = screen(syms)
     bar_dates = stats.pop("bar_dates", [])
+    mcap_info = stats.pop("mcap", None) or {"candidates": 0, "mcap_ok": 0, "mcap_err": 0}
     print("stats:", stats, flush=True)
     print(f"L sample: {hits_l[:20]}", flush=True)
     print(f"M sample: {hits_m[:20]}", flush=True)
@@ -486,13 +563,26 @@ def main(argv: Optional[list[str]] = None) -> int:
         extra = f"denom=screened universe={len(syms)} universe_fresh={dl.fresh}/{dl.requested}"
         if not denom_n:
             ok = False
-    result_word = "BLOCKED" if not ok else ("DRY_RUN" if args.dry_run else "WROTE")
+    mcap_ok_gate = mcap_lookup_ok(mcap_info)
+    extra += (f" mcap_ok={mcap_info.get('mcap_ok', 0)} mcap_err={mcap_info.get('mcap_err', 0)}"
+              f" candidates={mcap_info.get('candidates', 0)}")
+    reasons = ([] if ok else ["freshness"]) + ([] if mcap_ok_gate else ["mcap_lookup"])
+    if reasons:
+        extra += " reason=" + ",".join(reasons)
+    result_word = "BLOCKED" if reasons else ("DRY_RUN" if args.dry_run else "WROTE")
     print(format_status(session=expected, writer="Zhuli", fresh=fresh_n, denom=denom_n or 1,
                         yahoo=yahoo, retry=retry, stooq=stooq, result=result_word,
                         extra=extra), flush=True)
     if not ok:
         print(f"BLOCKED (freshness < 0.90): {info} — not written", file=sys.stderr, flush=True)
         return 3
+    if not mcap_ok_gate:
+        print(
+            f"BLOCKED (mcap lookup errors {mcap_info.get('mcap_err')}/{mcap_info.get('candidates')}"
+            f" > {MCAP_MAX_ERR_FRAC:.0%}): {mcap_info.get('err_symbols')} — not written",
+            file=sys.stderr, flush=True,
+        )
+        return 4
 
     if args.dry_run:
         print("dry-run OK (no Sheet write)", flush=True)

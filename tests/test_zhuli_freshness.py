@@ -73,7 +73,7 @@ def test_screen_collects_bar_dates_before_filters(monkeypatch):
     short = up.iloc[-50:]  # < MIN_DAILY_BARS: not screened, not counted
     monkeypatch.setattr(z, "download", lambda syms: {"UP": up, "CHEAP": cheap, "SHORT": short})
     monkeypatch.setattr(z, "drop_forming", lambda d: d)
-    monkeypatch.setattr(z, "filter_mcap", lambda s: list(s))
+    monkeypatch.setattr(z, "filter_mcap", lambda s: (list(s), {"candidates": len(s), "mcap_ok": len(s), "mcap_err": 0}))
     _, _, stats = z.screen(["UP", "CHEAP", "SHORT", "MISSING"])
     assert stats["bar_dates"] == [EXP, EXP]
     assert stats["filter_fail"] == 1
