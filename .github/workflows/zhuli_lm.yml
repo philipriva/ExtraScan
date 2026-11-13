@@ -33,7 +33,7 @@ concurrency:
 jobs:
   zhuli-lm:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Skip if session already succeeded
