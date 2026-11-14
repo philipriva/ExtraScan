@@ -1,0 +1,53 @@
+name: OHLCV Store Backup
+
+# Weekly backup of the OHLCV store (Philip 2026-11-14 t371u: weekly backup, no weekly
+# full re-download). Sunday 08:00 JST. Skips if a backup from the last 6 days exists.
+# Keeps the last 2 backups (two owner-created slot files, ~630 MB each). Writes only
+# warehouse/ohlcv_store_backup; never touches the store files or any Sheet.
+# revoke_public (dispatch only, one-time): remove "anyone with link" on the warehouse
+# folder, print remaining permissions, prove SA read still works.
+on:
+  schedule:
+    - cron: "0 23 * * 6"   # Sunday 08:00 JST
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Backup even if one exists this week"
+        type: boolean
+        default: false
+      revoke_public:
+        description: "One-time: remove anyone-with-link on warehouse folder (no backup)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ohlcv-store
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-store.txt
+      - name: Backup / revoke
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ "${{ inputs.revoke_public }}" = "true" ]; then
+            python ohlcv_backup.py revoke-public | tee out.log
+          else
+            EXTRA=()
+            if [ "${{ inputs.force }}" = "true" ]; then EXTRA+=(--force); fi
+            python ohlcv_backup.py backup "${EXTRA[@]}" | tee out.log
+          fi
+          rc=${PIPESTATUS[0]}
+          grep -h "^BACKUP\|^PERMS\|^SA_READ\|^removed" out.log >> "$GITHUB_STEP_SUMMARY" || true
+          exit $rc
