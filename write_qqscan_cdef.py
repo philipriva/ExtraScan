@@ -532,7 +532,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     etf_g = result.get("groups", {}).get("ETF") or {}
     us_g = result.get("groups", {}).get("US") or {}
-    yahoo = retry = stooq = 0
+    yahoo = retry = stooq = massive = 0
     extras = []
     fresh_n = denom_n = 0
     for label, g in (("ETF", etf_g), ("US", us_g)):
@@ -549,6 +549,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         yahoo += int(getattr(st, "yahoo", 0) or 0)
         retry += int(getattr(st, "retry", 0) or 0)
         stooq += int(getattr(st, "stooq", 0) or 0)
+        massive += int(getattr(st, "massive", 0) or 0)
     result_word = "BLOCKED" if blocked else ("WROTE" if not args.dry_run else "DRY_RUN")
     print(
         format_status(
@@ -559,6 +560,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             yahoo=yahoo,
             retry=retry,
             stooq=stooq,
+            massive=massive,
             result=result_word,
             extra=" ".join(extras),
         ),
