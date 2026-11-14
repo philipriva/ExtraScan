@@ -1,0 +1,163 @@
+name: OHLCV Store
+
+# Shared US daily OHLCV store on Drive (Sheet Ops warehouse / ohlcv_store).
+# Philip approved 2026-11-14 (t366u / ohlcv-store-plan). Writes ONLY the store files
+# (pre-created shard_NN.parquet + manifest.json) and catalog tabs store_summary /
+# store_catalog. Never writes any screener Sheet. Does not change any writer.
+#
+# daily   : Massive grouped daily (ONE request per session) + Yahoo fallback/spot-check.
+#           Primary 06:30 JST, backups 07:20 / 08:40 / 09:40 JST (Tue-Sat). Skips when
+#           manifest.session already == last complete US session. Gate: fresh >= .90.
+# backfill: workflow_dispatch only. Yahoo period=max per ticker (since listing),
+#           split-adjusted (auto_adjust=False). Matrix parts, sequential batches inside
+#           each part, sleep on 429. Resumable: each part restarts from its last
+#           store-part-N artifact (re-dispatch with resume=true or "Re-run failed jobs").
+on:
+  schedule:
+    - cron: "30 21 * * 1-5"   # 06:30 JST Tue-Sat
+    - cron: "20 22 * * 1-5"   # 07:20 JST
+    - cron: "40 23 * * 1-5"   # 08:40 JST
+    - cron: "40 0 * * 2-6"    # 09:40 JST
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "daily | backfill"
+        default: "daily"
+      parts:
+        description: "backfill: number of parts (matrix)"
+        default: "8"
+      resume:
+        description: "backfill: continue from previous store-part artifacts"
+        type: boolean
+        default: true
+      force:
+        description: "daily: rebuild even if session already in store"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ohlcv-store
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  daily:
+    if: github.event_name == 'schedule' || inputs.mode == 'daily'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-store.txt
+      - name: Daily increment (Massive grouped + Yahoo fallback)
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: |
+          EXTRA=()
+          if [ "${{ inputs.force }}" = "true" ]; then EXTRA+=(--force); fi
+          python ohlcv_store.py daily "${EXTRA[@]}" 2>&1 | tee daily.log
+          exit ${PIPESTATUS[0]}
+      - if: always()
+        run: grep -h "^STATUS\|FLAG" daily.log >> "$GITHUB_STEP_SUMMARY" || true
+
+  universe:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'backfill'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      parts: ${{ steps.p.outputs.parts }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-store.txt
+      - run: python ohlcv_store.py universe --out universe.json
+      - id: p
+        run: |
+          n=${{ inputs.parts }}
+          echo "parts=$(python -c "import json;print(json.dumps(list(range($n))))")" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: store-universe
+          path: universe.json
+          retention-days: 30
+          overwrite: true
+
+  part:
+    needs: universe
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        part: ${{ fromJson(needs.universe.outputs.parts) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-store.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: store-universe
+      - name: Resume from previous artifact
+        if: inputs.resume
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p part
+          id=$(gh api "repos/${{ github.repository }}/actions/artifacts?name=store-part-${{ matrix.part }}&per_page=1" --jq '.artifacts[0] | select(.expired==false) | .id' || true)
+          if [ -n "$id" ]; then
+            gh api "repos/${{ github.repository }}/actions/artifacts/$id/zip" > prev.zip && unzip -oq prev.zip -d part && echo "resumed from artifact $id"
+          else
+            echo "no previous artifact"
+          fi
+      - name: Yahoo period=max (sequential batches, 429 back-off)
+        run: python ohlcv_store.py backfill-part --universe-json universe.json --part ${{ matrix.part }} --parts ${{ inputs.parts }} --out-dir part --budget-min 300
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: store-part-${{ matrix.part }}
+          path: part/
+          retention-days: 30
+          overwrite: true
+          compression-level: 0
+
+  assemble:
+    needs: [universe, part]
+    if: always() && needs.universe.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-store.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: store-universe
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: store-part-*
+          path: parts
+      - name: Merge, Massive recent fill, Yahoo-vs-Massive compare, publish
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: |
+          python ohlcv_store.py assemble --universe-json universe.json --parts ${{ inputs.parts }} --parts-dir parts 2>&1 | tee assemble.log
+          exit ${PIPESTATUS[0]}
+      - if: always()
+        run: grep -h "^STATUS\|^COMPARE" assemble.log >> "$GITHUB_STEP_SUMMARY" || true
