@@ -1,0 +1,80 @@
+name: OHLCV Store Shadow
+
+# SHADOW ONLY (Philip plan step 2): each reader recomputes from the OHLCV store and is
+# compared with the official Sheet. NEVER writes Sheets: credentials are forced to
+# read-only scopes and every gspread write is recorded instead of sent.
+# Runs 10:50 JST Tue-Sat (after the official writers) and on demand.
+# Result lines: "SHADOW reader=... identical=yes|no" in the run summary + artifact.
+on:
+  schedule:
+    - cron: "50 1 * * 2-6"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ohlcv-shadow
+  cancel-in-progress: false
+
+jobs:
+  shadow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - reader: pulse
+            script: write_pulse_events.py
+            args: ""
+          - reader: cdef_etf
+            script: write_qqscan_cdef.py
+            args: "--columns C,D,F"
+          - reader: zhuli
+            script: write_zhuli_lm.py
+            args: ""
+          - reader: daily
+            script: run_extrascan.py
+            args: ""
+          - reader: cdef_e
+            script: write_qqscan_cdef.py
+            args: "--columns E"
+          - reader: us_exclude
+            script: usx/run_exclude.py
+            args: "--out-dir out_shadow"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        if: matrix.reader == 'us_exclude'
+        with:
+          repository: philipriva/us-exclude-screener
+          path: usx
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt pyarrow==26.0.1 google-api-python-client==2.202.0
+          if [ -f usx/requirements.txt ]; then pip install -r usx/requirements.txt; fi
+          if [ "${{ matrix.reader }}" = "cdef_etf" ] || [ "${{ matrix.reader }}" = "cdef_e" ]; then playwright install --with-deps chromium; fi
+      - name: Fetch store (read-only)
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: python store_shadow.py fetch --store-dir store
+      - name: Shadow ${{ matrix.reader }}
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python store_shadow.py run --reader ${{ matrix.reader }} --store-dir store \
+            --script ${{ matrix.script }} --result shadow_${{ matrix.reader }}.json -- ${{ matrix.args }} 2>&1 | tee shadow.log
+          grep -h "^SHADOW" shadow.log >> "$GITHUB_STEP_SUMMARY" || echo "SHADOW reader=${{ matrix.reader }} identical=no diff=no_result" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shadow-${{ matrix.reader }}
+          path: shadow_*.json
+          if-no-files-found: ignore
+          retention-days: 30

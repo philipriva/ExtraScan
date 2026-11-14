@@ -1,0 +1,11 @@
+# Pinned for the OHLCV store workflow only (writers keep requirements.txt).
+yfinance==1.8.0
+curl_cffi==0.17.0
+pandas==3.1.1
+pyarrow==26.0.1
+requests==2.34.2
+google-api-python-client==2.202.0
+google-auth==2.62.2
+gspread==6.2.1
+pandas_market_calendars==5.6.1
+pytest==9.2.0
