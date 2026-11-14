@@ -11,11 +11,12 @@ name: QQscan C D E F
 # 2) schedule primary/backup — GitHub UTC cron (can delay/skip after YAML churn).
 # 3) workflow_dispatch — manual / API (default dry_run=false).
 #
-# Schedule approved by Philip 2026-11-10 (t328u). GitHub cron is UTC.
-#   Primary: 0 22 * * 1-5  ≈ 07:00 JST Tue–Sat (US close + 1–2h)
-#   Extra backups (Philip t337u), odd minutes, finish before 11:00 JST (~35 min):
-#     53 23 * * 1-5 ≈ 08:53 JST Tue–Sat; 47 0 * * 2-6 ≈ 09:47 JST Tue–Sat.
-#   Late backup: 45 1 * * 2-6 ≈ 10:45 JST Tue–Sat (may finish after 11:00).
+# Schedule: workflow_run after Daily ExtraScan is the real primary (~07:05 JST).
+# Cron times are backups only, staggered vs Daily/Zhuli/us-exclude Yahoo pulls.
+# GitHub cron is UTC.
+#   Cron backup: 53 22 * * 1-5 ≈ 07:53 JST Tue–Sat (if workflow_run missed).
+#   Mid: 11:38 / 13:10 / 14:00 JST Tue–Sat (~35 min job).
+#   Late: 22 7 * * 2-6 ≈ 16:22 JST (after Daily late 15:00 + its workflow_run).
 # All schedule crons and workflow_run pass --skip-if-primary-done. Skip if a
 # schedule or workflow_run already succeeded for the session. Manual dispatch
 # is unchanged (default dry_run=false).
@@ -28,12 +29,12 @@ on:
     workflows: ["Daily ExtraScan"]
     types: [completed]
   schedule:
-    - cron: "0 22 * * 1-5"
-    - cron: "53 23 * * 1-5"
-    - cron: "47 0 * * 2-6"
-    - cron: "45 1 * * 2-6"
-    # Late backup 15:00 JST Tue–Sat (Yahoo last-bar often incomplete earlier).
-    - cron: "0 6 * * 2-6"
+    - cron: "53 22 * * 1-5"
+    - cron: "38 2 * * 2-6"
+    - cron: "10 4 * * 2-6"
+    - cron: "0 5 * * 2-6"
+    # Late backup 16:22 JST Tue–Sat (staggered 15:00 Yahoo ladder).
+    - cron: "22 7 * * 2-6"
   workflow_dispatch:
     inputs:
       columns:

@@ -17,17 +17,16 @@ on:
     workflows: ["Daily ExtraScan"]
     types: [completed]
   schedule:
-    # Primary: 0 3 * * 2-6 ≈ 11:00 HKT Tue–Sat (~30 min after QQscan A/J primary).
+    # Scheduled backups of workflow_run (which still fires with CDEF after Daily).
+    # Times shifted off full-universe primaries (us-exclude 09:13, Maggie 10:33).
+    # 0 3 * * 2-6 ≈ 12:00 JST Tue–Sat; 30 5 * * 2-6 ≈ 14:30 JST.
     - cron: "0 3 * * 2-6"
-    # Backup:  30 5 * * 2-6 ≈ 14:30 JST Tue–Sat (after QQscan backup 15 4;
-    #          far from Fund Flow 15 20 UTC).
     - cron: "30 5 * * 2-6"
-    # Pre-11:00 backups (Philip t337u), odd minutes, ~2–7 min job:
-    # 09:11 JST Tue–Sat; 10:23 JST Tue–Sat. Skip if workflow_run already wrote.
-    - cron: "11 0 * * 2-6"
-    - cron: "23 1 * * 2-6"
-    # Late backup 15:00 JST Tue–Sat (Yahoo last-bar often incomplete earlier).
-    - cron: "0 6 * * 2-6"
+    # Additional backups: 13:11 / 13:23 JST Tue–Sat. Skip if workflow_run wrote.
+    - cron: "11 4 * * 2-6"
+    - cron: "23 4 * * 2-6"
+    # Late backup 16:42 JST Tue–Sat (after CDEF late 16:22 in the 15:00 ladder).
+    - cron: "42 7 * * 2-6"
   workflow_dispatch:
 
 permissions:
