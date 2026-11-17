@@ -35,6 +35,7 @@ import sys
 import time
 import zlib
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
@@ -53,6 +54,11 @@ COMPARE_RANDOM = 20
 COMPARE_MAX_FLAG_FRAC = 0.20            # > 20 % flagged -> formats broken -> BLOCK
 MASSIVE_URL = "https://api.massive.com/v2/aggs/grouped/locale/us/market/stocks/{day}"
 MASSIVE_MIN_GAP_SEC = 13.0              # free tier ~5 calls/min
+MASSIVE_429_SLEEP_SEC = 65.0
+MASSIVE_403_SLEEP_SEC = 20 * 60.0
+MASSIVE_403_MAX_RETRIES = 2
+MASSIVE_403_CUTOFF_JST = (10, 30)
+JST = ZoneInfo("Asia/Tokyo")
 DEFAULT_FOLDER_ID = "1ZLSzOu_ytfjcDUENkW6o0JBmh2b03F3R"
 DEFAULT_CATALOG_ID = "1yuAfmzDP08S3axz4R1vrU2gquQMWk4Sck87tWQLk7us"
 NASDAQ_LISTED = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
@@ -352,8 +358,23 @@ def yahoo_download(tickers: list[str], *, period: Optional[str] = "max", start: 
 _last_massive_call = [0.0]
 
 
-def massive_grouped(session: date, *, get: Optional[Callable] = None, sleep: Callable = time.sleep) -> Optional[list]:
-    """ONE grouped-daily request for the whole market. Key never printed."""
+def _seconds_until_403_cutoff(now: datetime) -> float:
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    j = now.astimezone(JST)
+    h, mi = MASSIVE_403_CUTOFF_JST
+    cutoff = j.replace(hour=h, minute=mi, second=0, microsecond=0)
+    return (cutoff - j).total_seconds()
+
+
+def massive_grouped(session: date, *, get: Optional[Callable] = None, sleep: Callable = time.sleep,
+                    now_fn: Optional[Callable] = None) -> Optional[list]:
+    """ONE grouped-daily request for the whole market. Key never printed.
+
+    429: short (~65s) backoff, up to 3 tries. 403 (file not published yet):
+    retry every 20 minutes until 10:30 JST or MASSIVE_403_MAX_RETRIES, then
+    return None so the caller falls back to Yahoo. Never a silent stale write.
+    """
     key = os.environ.get("MASSIVE_API_KEY", "").strip()
     if not key:
         log("massive: no key")
@@ -361,7 +382,10 @@ def massive_grouped(session: date, *, get: Optional[Callable] = None, sleep: Cal
     import requests
 
     get = get or requests.get
-    for attempt in range(3):
+    clock = now_fn or (lambda: datetime.now(timezone.utc))
+    n429 = 0
+    n403 = 0
+    while n429 < 3:
         gap = time.monotonic() - _last_massive_call[0]
         if gap < MASSIVE_MIN_GAP_SEC:
             sleep(MASSIVE_MIN_GAP_SEC - gap)
@@ -371,18 +395,39 @@ def massive_grouped(session: date, *, get: Optional[Callable] = None, sleep: Cal
                     headers={"Authorization": f"Bearer {key}"}, timeout=60)
         except Exception as e:
             log(f"massive {session}: {type(e).__name__}")
-            continue
-        if r.status_code in (403, 429):
-            # 403 can mean the session grouped file is not published yet.
-            log(f"massive {session}: HTTP {r.status_code}; sleep 65s")
-            sleep(65)
-            continue
-        if r.status_code != 200:
-            log(f"massive {session}: HTTP {r.status_code}")
+            n429 += 1
+            if n429 < 3:
+                sleep(MASSIVE_429_SLEEP_SEC)
+                continue
+            log(f"massive {session}: request retries exhausted; falling back to Yahoo")
             return None
-        res = (r.json() or {}).get("results") or []
-        log(f"massive {session}: {len(res)} rows")
-        return res
+        if r.status_code == 200:
+            res = (r.json() or {}).get("results") or []
+            log(f"massive {session}: {len(res)} rows")
+            return res
+        if r.status_code == 429:
+            n429 += 1
+            if n429 < 3:
+                log(f"massive {session}: HTTP 429; retry in {MASSIVE_429_SLEEP_SEC:.0f}s")
+                sleep(MASSIVE_429_SLEEP_SEC)
+                continue
+            log(f"massive {session}: 429 retries exhausted; falling back to Yahoo")
+            return None
+        if r.status_code == 403:
+            left = _seconds_until_403_cutoff(clock())
+            if left <= 0:
+                log(f"massive {session}: HTTP 403 after 10:30 JST cutoff; falling back to Yahoo (no stale fill)")
+                return None
+            if n403 >= MASSIVE_403_MAX_RETRIES:
+                log(f"massive {session}: 403 retries exhausted before cutoff; falling back to Yahoo")
+                return None
+            wait = min(MASSIVE_403_SLEEP_SEC, left)
+            n403 += 1
+            log(f"massive {session}: HTTP 403 (session file may be unpublished); retry in {wait:.0f}s (cutoff 10:30 JST)")
+            sleep(wait)
+            continue
+        log(f"massive {session}: HTTP {r.status_code}; falling back to Yahoo")
+        return None
     return None
 
 
@@ -636,6 +681,22 @@ def _publish(drv: Drive, shards: dict, session: date, uni_n: int, fresh_n: int, 
         total_rows += len(shards[i])
     manifest["rows"] = int(total_rows)
     manifest["bytes"] = int(sum(v["bytes"] for v in manifest["shards"].values()))
+    # Per-ticker source of the published session bar (yahoo | massive). 指原
+    # 2026-11-17: mixed-source store must record origin so dual-run diffs can
+    # be attributed. Also counted in session_source_counts.
+    ts = pd.Timestamp(session)
+    bar_source = {}
+    for sh in shards.values():
+        if not len(sh):
+            continue
+        part = sh.loc[sh["date"] == ts, ["ticker", "source"]]
+        for tkr, src in part.itertuples(index=False):
+            bar_source[str(tkr)] = str(src)
+    counts = {}
+    for src in bar_source.values():
+        counts[src] = counts.get(src, 0) + 1
+    manifest["session_bar_source"] = bar_source
+    manifest["session_source_counts"] = counts
     mp = workdir / "manifest.json"
     mp.write_text(json.dumps(manifest, indent=1))
     drv.upload("manifest.json", mp, mime="application/json")

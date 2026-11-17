@@ -13,16 +13,13 @@ name: Pulse events to Sheet
 # Schedule: after US cash settle (same window as zhuli L/M).
 on:
   schedule:
-    # Mon–Fri 21:50 UTC ≈ 17:50 EDT (US close 16:00 + ~1h50)
-    - cron: "50 21 * * 1-5"
-    # Backup: Tue–Sat 00:40 UTC ≈ 09:40 JST
-    - cron: "40 0 * * 2-6"
-    # Extra morning backups (Philip t337u), odd minutes, before 11:00 JST
-    # (~1 min job): 08:13 JST Tue–Sat; 10:17 JST Tue–Sat.
-    - cron: "13 23 * * 1-5"
-    - cron: "17 1 * * 2-6"
-    # Late backup 15:00 JST Tue–Sat (Yahoo last-bar often incomplete earlier).
-    - cron: "0 6 * * 2-6"
+# Primary trigger is the 07:30 JST routine (workflow_dispatch), approved
+# 2026-11-17 (Philip / 指原). GitHub schedule is a midday backup only:
+# odd minutes, Tue–Sat, staggered so writers do not share a Yahoo pull.
+# Skip-if-session-already-succeeded makes this a no-op after a successful
+# morning run. Do not add morning crons; GitHub schedule has no SLA.
+    # Midday backup: 13:23 JST Tue–Sat = `23 4 * * 2-6` UTC.
+    - cron: "23 4 * * 2-6"
   workflow_dispatch:
     inputs:
       refresh_universe:

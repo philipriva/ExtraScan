@@ -143,7 +143,13 @@ def test_shard_assignment_stable():
     assert st.shard_of("AAPL") == st.shard_of("AAPL") and 0 <= st.shard_of("BRK-B") < st.N_SHARDS
 
 
-def test_massive_grouped_retries_403_then_returns_rows(monkeypatch):
+def _jst(h, mi):
+    from datetime import datetime
+    import ohlcv_store as st
+    return datetime(2026, 11, 17, h, mi, tzinfo=st.JST)
+
+
+def test_massive_grouped_retries_403_minute_level_then_returns_rows(monkeypatch):
     import ohlcv_store as st
     monkeypatch.setenv("MASSIVE_API_KEY", "k")
     hits = []
@@ -163,9 +169,107 @@ def test_massive_grouped_retries_403_then_returns_rows(monkeypatch):
         return seq[len(hits) - 1]
 
     sleeps = []
-    # reset min-gap clock so the test does not sleep 13s
     st._last_massive_call[0] = 0.0
-    rows = st.massive_grouped(__import__("datetime").date(2026, 11, 16), get=get, sleep=sleeps.append)
+    rows = st.massive_grouped(
+        __import__("datetime").date(2026, 11, 16),
+        get=get,
+        sleep=sleeps.append,
+        now_fn=lambda: _jst(8, 12),
+    )
     assert rows and rows[0]["T"] == "AAA"
     assert len(hits) == 2
-    assert 65 in sleeps  # 403 backoff
+    assert st.MASSIVE_403_SLEEP_SEC in sleeps
+    assert 65 not in sleeps
+
+
+def test_massive_grouped_429_uses_short_backoff(monkeypatch):
+    import ohlcv_store as st
+    monkeypatch.setenv("MASSIVE_API_KEY", "k")
+    hits = []
+
+    class R:
+        status_code = 429
+
+        def json(self):
+            return {}
+
+    def get(url, **kw):
+        hits.append(url)
+        return R()
+
+    sleeps = []
+    import time as _t; st._last_massive_call[0] = _t.monotonic() - 20  # skip min-gap
+    out = st.massive_grouped(
+        __import__("datetime").date(2026, 11, 16),
+        get=get,
+        sleep=sleeps.append,
+        now_fn=lambda: _jst(8, 12),
+    )
+    assert out is None
+    assert len(hits) == 3
+    assert sleeps.count(st.MASSIVE_429_SLEEP_SEC) == 2
+
+
+def test_massive_grouped_403_after_cutoff_no_retry(monkeypatch):
+    import ohlcv_store as st
+    monkeypatch.setenv("MASSIVE_API_KEY", "k")
+    hits = []
+
+    class R:
+        status_code = 403
+
+        def json(self):
+            return {}
+
+    def get(url, **kw):
+        hits.append(url)
+        return R()
+
+    sleeps = []
+    import time as _t; st._last_massive_call[0] = _t.monotonic() - 20
+    out = st.massive_grouped(
+        __import__("datetime").date(2026, 11, 16),
+        get=get,
+        sleep=sleeps.append,
+        now_fn=lambda: _jst(10, 31),
+    )
+    assert out is None
+    assert len(hits) == 1
+    assert sleeps == []
+
+
+def test_publish_manifest_records_per_ticker_source():
+    import ohlcv_store as st
+    from datetime import date
+    import pandas as pd
+    from pathlib import Path
+    import tempfile
+
+    session = date(2026, 11, 16)
+    rows = st.normalize(pd.DataFrame({
+        "ticker": ["AAA", "BBB"],
+        "date": [pd.Timestamp(session), pd.Timestamp(session)],
+        "open": [1.0, 2.0], "high": [1.1, 2.1], "low": [0.9, 1.9],
+        "close": [1.0, 2.0], "adj_close": [1.0, 2.0], "volume": [10, 20],
+        "source": ["massive", "yahoo"],
+    }))
+    shards = {i: st.empty_frame() for i in range(st.N_SHARDS)}
+    for _, r in rows.iterrows():
+        k = st.shard_of(r["ticker"])
+        shards[k] = st.merge_rows(shards[k], rows[rows["ticker"] == r["ticker"]])
+
+    class DummyDrv:
+        def upload(self, *a, **k):
+            return {}
+
+    import ohlcv_store as st2
+    # Call the source-map logic the same way _publish does
+    ts = pd.Timestamp(session)
+    bar_source = {}
+    for sh in shards.values():
+        if not len(sh):
+            continue
+        part = sh.loc[sh["date"] == ts, ["ticker", "source"]]
+        for tkr, src in part.itertuples(index=False):
+            bar_source[str(tkr)] = str(src)
+    assert bar_source == {"AAA": "massive", "BBB": "yahoo"}

@@ -12,22 +12,13 @@ name: QQscan to Sheet
 # Scheduler resync: 2026-10-23 — comment bump to re-register crons after YAML churn skips.
 on:
   schedule:
-    # GitHub Actions cron is UTC only (no CRON_TZ). Schedules can delay or skip a day;
-    # keep a primary + backup so a miss does not leave Sheet on yesterday's Strong_Stocks.
-    #
-    # Upstream: Q-scanner Maggiestocks_YYYYMMDD + my-stock-scanner Strong_Stocks_V3
-    # typically land ~01:40–01:52 UTC (~09:40–09:52 HKT).
-    # Old "0 22 * * 1-5" raced ahead of those publishes and wrote yesterday's files.
-    #
-    # Primary: 30 2 * * 2-6 ≈ 10:30 HKT Tue–Sat (~38 min after typical publish).
-    # Backup:  15 4 * * 2-6 ≈ 12:15 HKT Tue–Sat (catch skipped/delayed primary;
-    #          still far from Fund Flow ExtraScan at 15 20 * * 1-5 UTC).
-    # File-driven: Strong + Maggie repository_dispatch write A/J without waiting on cron.
-    - cron: "0 1 * * 2-6"
-    # Extra pre-11:00 backup (Philip t337u): 10:37 JST Tue–Sat (~1–15 min).
-    # After the 10:00 primary so Strong/Maggie files have a better chance to exist.
-    - cron: "37 1 * * 2-6"
-    - cron: "15 4 * * 2-6"
+# Primary trigger is the 07:30 JST routine (workflow_dispatch), approved
+# 2026-11-17 (Philip / 指原). GitHub schedule is a midday backup only:
+# odd minutes, Tue–Sat, staggered so writers do not share a Yahoo pull.
+# Skip-if-session-already-succeeded makes this a no-op after a successful
+# morning run. Do not add morning crons; GitHub schedule has no SLA.
+    # Midday backup: 15:07 JST Tue–Sat (Strong/Maggie repository_dispatch remains primary path) = `7 6 * * 2-6` UTC.
+    - cron: "7 6 * * 2-6"
   workflow_dispatch:
     inputs:
       dry_run:

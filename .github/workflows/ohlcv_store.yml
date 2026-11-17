@@ -14,10 +14,13 @@ name: OHLCV Store
 #           store-part-N artifact (re-dispatch with resume=true or "Re-run failed jobs").
 on:
   schedule:
-    - cron: "30 21 * * 1-5"   # 06:30 JST Tue-Sat
-    - cron: "20 22 * * 1-5"   # 07:20 JST
-    - cron: "40 23 * * 1-5"   # 08:40 JST
-    - cron: "40 0 * * 2-6"    # 09:40 JST
+# Primary trigger is the 07:30 JST routine (workflow_dispatch), approved
+# 2026-11-17 (Philip / 指原). GitHub schedule is a midday backup only:
+# odd minutes, Tue–Sat, staggered so writers do not share a Yahoo pull.
+# Skip-if-session-already-succeeded makes this a no-op after a successful
+# morning run. Do not add morning crons; GitHub schedule has no SLA.
+    # Midday backup: 12:07 JST Tue–Sat = `7 3 * * 2-6` UTC.
+    - cron: "7 3 * * 2-6"
   workflow_dispatch:
     inputs:
       mode:

@@ -2,21 +2,13 @@ name: Daily ExtraScan
 
 on:
   schedule:
-    # GitHub Actions cron is UTC only (no CRON_TZ).
-    # Primary: 30 21 * * 1-5 ≈ Mon–Fri 17:30 America/New_York during EDT (UTC-4).
-    # During EST (UTC-5) change primary to: 30 22 * * 1-5
-    # Later than cash+15m so Yahoo daily bars usually show the session date;
-    # run_extrascan also refuses Sheets write if last bar ≠ prior complete session.
-    - cron: "30 21 * * 1-5"
-    # Morning backups (Philip t337u): odd-minute crons before 11:00 JST so a
-    # delayed/missed 06:30 still finishes in time (~35 min job).
-    # 19 23 * * 1-5 ≈ 08:19 JST Tue–Sat; 41 0 * * 2-6 ≈ 09:41 JST Tue–Sat.
-    - cron: "19 23 * * 1-5"
-    - cron: "41 0 * * 2-6"
-    # Late backup: Tue–Sat 06:00 UTC ≈ 15:00 JST / 02:00 ET — Yahoo full-universe
-    # bars often incomplete at the primary window (2026-10-29 schedule failed
-    # freshness at ~01:05 UTC with frac~0.29; same-day manual ~06:25 UTC OK).
-    - cron: "0 6 * * 2-6"
+# Primary trigger is the 07:30 JST routine (workflow_dispatch), approved
+# 2026-11-17 (Philip / 指原). GitHub schedule is a midday backup only:
+# odd minutes, Tue–Sat, staggered so writers do not share a Yahoo pull.
+# Skip-if-session-already-succeeded makes this a no-op after a successful
+# morning run. Do not add morning crons; GitHub schedule has no SLA.
+    # Midday backup: 12:27 JST Tue–Sat = `27 3 * * 2-6` UTC.
+    - cron: "27 3 * * 2-6"
   workflow_dispatch:
     inputs:
       etf_only:
