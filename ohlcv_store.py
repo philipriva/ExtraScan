@@ -372,8 +372,9 @@ def massive_grouped(session: date, *, get: Optional[Callable] = None, sleep: Cal
         except Exception as e:
             log(f"massive {session}: {type(e).__name__}")
             continue
-        if r.status_code == 429:
-            log(f"massive {session}: HTTP 429; sleep 65s")
+        if r.status_code in (403, 429):
+            # 403 can mean the session grouped file is not published yet.
+            log(f"massive {session}: HTTP {r.status_code}; sleep 65s")
             sleep(65)
             continue
         if r.status_code != 200:

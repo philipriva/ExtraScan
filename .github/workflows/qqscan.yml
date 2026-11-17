@@ -70,6 +70,7 @@ jobs:
         if: steps.already.outputs.skip != 'true'
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Wait up to 15 min for dated files. write_qqscan writes column A as soon as
           # Strong is fresh, then polls for Maggiestocks date >= Strong date (so J is not

@@ -141,3 +141,31 @@ def test_part_split_is_complete_and_disjoint():
 
 def test_shard_assignment_stable():
     assert st.shard_of("AAPL") == st.shard_of("AAPL") and 0 <= st.shard_of("BRK-B") < st.N_SHARDS
+
+
+def test_massive_grouped_retries_403_then_returns_rows(monkeypatch):
+    import ohlcv_store as st
+    monkeypatch.setenv("MASSIVE_API_KEY", "k")
+    hits = []
+
+    class R:
+        def __init__(self, code, payload=None):
+            self.status_code = code
+            self._payload = payload or {}
+
+        def json(self):
+            return self._payload
+
+    seq = [R(403), R(200, {"results": [{"T": "AAA", "o": 1, "h": 2, "l": 0.5, "c": 1.5, "v": 7}]})]
+
+    def get(url, **kw):
+        hits.append(url)
+        return seq[len(hits) - 1]
+
+    sleeps = []
+    # reset min-gap clock so the test does not sleep 13s
+    st._last_massive_call[0] = 0.0
+    rows = st.massive_grouped(__import__("datetime").date(2026, 11, 16), get=get, sleep=sleeps.append)
+    assert rows and rows[0]["T"] == "AAA"
+    assert len(hits) == 2
+    assert 65 in sleeps  # 403 backoff

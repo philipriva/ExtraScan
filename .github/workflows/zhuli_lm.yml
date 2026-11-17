@@ -53,6 +53,7 @@ jobs:
         if: steps.already.outputs.skip != 'true'
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
         run: |
           set -euo pipefail
           echo "event=${{ github.event_name }}"
