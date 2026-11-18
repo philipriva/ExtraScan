@@ -297,6 +297,16 @@ def last_bar_date(d, now: Optional[datetime] = None) -> Optional[date]:
     trimmed = drop_forming(d, now=now)
     if trimmed is None or trimmed.empty:
         return None
+    # Trailing placeholder / incomplete rows (NaN in OHLC) must not count as
+    # a last bar. Today Zhuli download-layer freshness was 5159/6603=0.78
+    # using the raw index, but after normalize().dropna() only 236/4269
+    # last bars were still 2026-11-17 (unique dates 11-13/16/17, no 11-18).
+    cols = [c for c in trimmed.columns if str(c).lower() in ("open", "high", "low", "close")]
+    if cols:
+        valid = trimmed.dropna(subset=cols, how="any")
+        if valid is None or getattr(valid, "empty", True):
+            return None
+        trimmed = valid
     return bar_date(trimmed.index[-1])
 
 
@@ -579,7 +589,12 @@ def _append_stooq_gaps(yahoo_df, stooq_df, expected: date):
         recs.append(rec)
     add = pd.DataFrame(recs, index=pd.to_datetime([d for d, _ in add_rows]))
     if y.index.tz is not None:
-        add.index = add.index.tz_localize(y.index.tz)
+        # Session dates are NY calendar dates. Localizing naive midnight into
+        # the Yahoo frame's tz is wrong when that tz is UTC: 11-17 00:00 UTC
+        # becomes bar_date()=11-16 ET, so last_bar_date != expected and
+        # massive_gap_fill discards the merge (today: filled 4/104 CDEF,
+        # 6/365 Zhuli even though grouped 2026-11-17 returned 12,602 rows).
+        add.index = add.index.tz_localize(NY).tz_convert(y.index.tz)
     out = pd.concat([y, add]).sort_index()
     # Keep first on duplicates — Yahoo wins
     out = out[~out.index.duplicated(keep="first")]

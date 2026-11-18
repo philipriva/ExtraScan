@@ -286,3 +286,24 @@ def test_backup_api_error_runs_normally_but_stale_still_blocks(monkeypatch):
     monkeypatch.setattr(m, "parse_symbols", lambda t: ["AAA"])
     monkeypatch.setattr(m, "download_daily", lambda syms, expected=None, **k: ({s: stale for s in syms}, _DlStats()))
     assert m.main(["--skip-if-primary-done", "--columns", "E", "--symbols", "AAA"]) == 3 and calls == []
+
+
+def test_cdf_still_written_when_e_blocked(monkeypatch):
+    """指原 2026-11-18: C/D/F decoupled from E — they write on their own
+    freshness and only E is BLOCKED (exit 3 kept so the run is flagged)."""
+    calls = []
+    monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_JSON", "{}")
+    monkeypatch.setattr(sheets_writer, "write_column", lambda sa, sid, tab, col, vals, header=None: calls.append((tab, col)) or len(vals))
+    exp = date(2026, 11, 9)
+    fresh = _frame([10, 10, 10, 10, 10, 11], start="2026-11-02")
+    stale = _frame([10, 10, 10, 10, 10, 11], start="2026-10-30")
+    monkeypatch.setattr(m, "last_complete_us_session_date", lambda: exp)
+    monkeypatch.setattr(m, "load_etf_list", lambda p: ["AAA"])
+
+    def dl(syms, expected=None, **k):
+        return ({s: (fresh if s == "AAA" else stale) for s in syms}, _DlStats())
+
+    monkeypatch.setattr(m, "download_daily", dl)
+    rc = m.main(["--columns", "C,D,E,F", "--skip-holdings", "--symbols", "BBB,CCC"])
+    assert rc == 3
+    assert sorted(calls) == [("QQscan", "C"), ("QQscan", "D"), ("QQscan", "F")]

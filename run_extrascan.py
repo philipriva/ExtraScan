@@ -29,6 +29,7 @@ import requests
 import yfinance as yf
 
 from marketdata import (
+    bar_date,
     download_daily,
     drop_forming as _md_drop_forming,
     format_status,
@@ -439,7 +440,7 @@ def screen_split(
             norm_fail.append(sym)
             continue
         screened += 1
-        bar_dates.append(pd.Timestamp(ohlc.index[-1]).date())
+        bar_dates.append(bar_date(ohlc.index[-1]))
         if y:
             yellow.append(sym)
         if w:
