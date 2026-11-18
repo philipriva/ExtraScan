@@ -28,6 +28,7 @@ import yfinance as yf
 
 from marketdata import (
     _run_with_timeout,
+    bar_date,
     download_daily,
     format_status,
     freshness_ok,
@@ -405,7 +406,7 @@ def screen(syms: list[str]) -> tuple[list[str], list[str], dict]:
         if d is None or len(d) < MIN_DAILY_BARS:
             stats["norm_fail"] += 1
             continue
-        bar_dates.append(pd.Timestamp(d.index[-1]).date())
+        bar_dates.append(bar_date(d.index[-1]))
         if not daily_filters_ok(d):
             stats["filter_fail"] += 1
             continue
