@@ -34,13 +34,25 @@ on:
         description: "Compute only; do not write Sheet"
         type: boolean
         default: false
+      data_source:
+        description: "yahoo (default, unchanged) | store (read Drive OHLCV store; Yahoo only for tickers absent from store)"
+        type: choice
+        options:
+          - yahoo
+          - store
+        default: yahoo
+      asof:
+        description: "YYYY-MM-DD target session (dry_run only; blank = last complete session)"
+        default: ""
 
 permissions:
   contents: read
   actions: read
 
 concurrency:
-  group: qqscan-cdef
+  # Live runs keep the exact group "qqscan-cdef". Dry-run dispatches never write,
+  # so they use their own group and cannot delay a live/recovery run.
+  group: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && 'qqscan-cdef-dryrun' || 'qqscan-cdef' }}
   cancel-in-progress: false
 
 jobs:
@@ -56,11 +68,15 @@ jobs:
         run: |
           pip install -r requirements.txt
           playwright install --with-deps chromium
+      - name: Install store deps (store mode only)
+        if: github.event_name == 'workflow_dispatch' && inputs.data_source == 'store'
+        run: pip install pyarrow==26.0.1 google-api-python-client==2.202.0
       - name: Screen → QQscan C/D/E/F
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+          ASOF_INPUT: ${{ inputs.asof }}
         run: |
           set -euo pipefail
           EXTRA=()
@@ -69,6 +85,8 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             COLS="${{ inputs.columns }}"
             if [ "${{ inputs.dry_run }}" = "true" ]; then EXTRA+=(--dry-run); fi
+            if [ "${{ inputs.data_source }}" = "store" ]; then EXTRA+=(--data-source store); fi
+            if [ -n "${ASOF_INPUT:-}" ]; then EXTRA+=(--asof "$ASOF_INPUT"); fi
           fi
           # Midday backup skips if this session was already written.
           if [ "${{ github.event_name }}" = "schedule" ]; then

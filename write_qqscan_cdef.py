@@ -403,6 +403,48 @@ def parse_cols(text: str) -> list[str]:
     return cols
 
 
+def _store_fetcher(args, cols: list[str], expected: date, sa: str):
+    """Store mode data layer. Returns (fetch, store_info, rc); fetch=None -> BLOCKED, write nothing."""
+    import cdef_store_source as css
+
+    store_dir = Path(args.store_dir) if args.store_dir else Path("ohlcv_store_cache")
+    try:
+        if not args.store_dir:
+            if not sa:
+                raise css.StoreNotReady("GOOGLE_SERVICE_ACCOUNT_JSON not set (needed to read the store)")
+            css.fetch_store(store_dir, css.default_folder_id(), sa)
+        man = css.check_manifest(store_dir, expected)
+    except css.StoreNotReady as exc:
+        print(f"[store] NOT READY: {exc}", flush=True)
+        print(
+            format_status(
+                session=expected, writer="CDEF", fresh=0, denom=1, yahoo=0, retry=0, stooq=0, massive=0,
+                result="BLOCKED", extra=f"source=store store_not_ready",
+            ),
+            flush=True,
+        )
+        if args.out_json:
+            Path(args.out_json).write_text(
+                json.dumps(
+                    {"expected": expected.isoformat(), "data_source": "store", "store_error": str(exc),
+                     "columns": {}, "groups": {}, "blocked": list(cols)},
+                    ensure_ascii=False, indent=2,
+                ),
+                encoding="utf-8",
+            )
+        print(f"BLOCKED (store not ready): {cols} — not written", file=sys.stderr, flush=True)
+        return None, None, 3
+    info = {
+        "session": man.get("session"),
+        "built_utc": man.get("built_utc"),
+        "mode": man.get("mode"),
+        "fresh_frac": man.get("fresh_frac"),
+        "rows": man.get("rows"),
+    }
+    print(f"[store] ready session={info['session']} built_utc={info['built_utc']} rows={info['rows']}", flush=True)
+    return (lambda syms, exp: css.load_frames(list(syms), exp, store_dir)), info, 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(description="QQscan C/D/E/F (TD S9 / TD B1 / zhuli daily)")
     p.add_argument("--sheet-id", default=os.environ.get("EXTRASCAN_SHEET_ID", DEFAULT_SHEET_ID))
@@ -418,6 +460,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="Backup mode: exit 0 without writing if a primary (schedule or workflow_run) already wrote the expected session",
     )
+    p.add_argument(
+        "--data-source",
+        choices=("yahoo", "store"),
+        default="yahoo",
+        help="yahoo (default, unchanged) | store: read history from the Drive OHLCV store (cdef_store_source)",
+    )
+    p.add_argument("--store-dir", default="", help="store mode: local dir with manifest.json + shards (skip Drive download)")
     args = p.parse_args(argv)
 
     cols = parse_cols(args.columns)
@@ -448,6 +497,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 2
     print(f"QQscan CDEF cols={cols} expected_session={expected} dry_run={args.dry_run}", flush=True)
 
+    fetch = download_daily
+    store_info: Optional[dict] = None
+    if args.data_source == "store":
+        fetch, store_info, rc = _store_fetcher(args, cols, expected, sa)
+        if fetch is None:
+            return rc
+
     result: dict = {"expected": expected.isoformat(), "columns": {}, "groups": {}}
     etf_dl = us_dl = None
     values: dict[str, list[str]] = {}
@@ -458,7 +514,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if etf_cols:
         etf_path = Path(args.etf_list)
         etfs = load_etf_list(etf_path)
-        frames, etf_dl = download_daily(etfs, expected)
+        frames, etf_dl = fetch(etfs, expected)
         checks = {}
         if "C" in etf_cols:
             checks["C"] = lambda d: td_sell9(d["Close"])
@@ -491,7 +547,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # --- US stocks group (E) ---
     if "E" in cols:
         uni = parse_symbols(args.symbols) if args.symbols.strip() else universe_us_ex_etf_fund()
-        frames, us_dl = download_daily(uni, expected)
+        frames, us_dl = fetch(uni, expected)
         ev = evaluate(frames, uni, expected, {"E": zhuli_daily_cross_up}, asof)
         result["groups"]["US"] = {k: v for k, v in ev.items() if k not in ("hits", "stale", "missing")}
         result["groups"]["US"]["n_stale"] = len(ev["stale"])
@@ -517,6 +573,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     for c in sorted(values):
         print(f"{c} n={len(values[c])} sample={values[c][:20]}", flush=True)
     result["blocked"] = blocked
+    if store_info is not None:
+        result["data_source"] = "store"
+        result["store"] = dict(store_info)
+        result["store"]["fill"] = {
+            label: {"store": st_.store, "absent": st_.store_absent, "absent_symbols": st_.absent, "yahoo_filled": st_.yahoo}
+            for label, st_ in (("ETF", etf_dl), ("US", us_dl))
+            if st_ is not None
+        }
     if args.out_json:
         Path(args.out_json).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -550,6 +614,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         retry += int(getattr(st, "retry", 0) or 0)
         stooq += int(getattr(st, "stooq", 0) or 0)
         massive += int(getattr(st, "massive", 0) or 0)
+    if store_info is not None:
+        n_store = sum(int(getattr(st, "store", 0) or 0) for st in (etf_dl, us_dl) if st is not None)
+        n_absent = sum(int(getattr(st, "store_absent", 0) or 0) for st in (etf_dl, us_dl) if st is not None)
+        extras += [f"source=store store={n_store} absent={n_absent} store_session={store_info.get('session')}"]
     result_word = "BLOCKED" if blocked else ("WROTE" if not args.dry_run else "DRY_RUN")
     print(
         format_status(
