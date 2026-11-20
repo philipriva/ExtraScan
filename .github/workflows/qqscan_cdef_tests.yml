@@ -6,6 +6,8 @@ on:
   pull_request:
     paths:
       - "write_qqscan_cdef.py"
+      - "cdef_store_source.py"
+      - "ohlcv_store.py"
       - "marketdata.py"
       - "run_extrascan.py"
       - "write_zhuli_lm.py"
@@ -29,5 +31,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt pytest
+      - run: pip install -r requirements.txt pytest pyarrow==26.0.1
       - run: python -m pytest -q tests
